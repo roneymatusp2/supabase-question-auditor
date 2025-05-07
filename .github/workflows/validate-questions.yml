@@ -1,58 +1,58 @@
 name: Validate Supabase Questions
-
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  push:          { branches: [ main ] }
+  pull_request:  { branches: [ main ] }
   workflow_dispatch:
   schedule:
-    - cron: '0 5 * * *'  # Run at 05:00 UTC daily
+    # 05 h UTC = 02 h BRT
+    - cron: '0 5 * * *'
 
 jobs:
   validate:
-    name: Validate and Fix Monomial Questions
     runs-on: ubuntu-latest
-    
     env:
-      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-    
+      SUPABASE_URL: https://gjvtncdjcslnkfctqnfy.supabase.co   # adiciona para não depender de dotenv
+      SUPABASE_SERVICE_KEY:   ${{ secrets.SUPABASE_SERVICE_KEY }}
+      SUPABASE_ACCESS_TOKEN:  ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      DEEPSEEK_API_KEY:       ${{ secrets.DEEPSEEK_API_KEY }}
+
     steps:
-      - name: Checkout code
+      - name: 📥 Checkout repo
         uses: actions/checkout@v4
-      
-      - name: Setup Node.js
+
+      - name: ⚙️  Setup Node.js 20
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
-      
-      - name: Install dependencies
-        run: npm ci
-      
-      - name: Install Supabase CLI
+          node-version: 20
+          cache: npm
+
+      #--- Mitigar pacotes corrompidos ---#
+      - name: 🧹 Clean npm cache & install deps (3 tentativas)
         run: |
-          curl -s https://api.github.com/repos/supabase/cli/releases/tags/v1.158.4 | \
-            grep "browser_download_url.*$(uname)-$(uname -m)" | \
-            cut -d : -f 2,3 | \
-            tr -d \" | \
-            wget -qi - -O supabase.deb
-          sudo dpkg -i supabase.deb
-          rm supabase.deb
+          npm cache clean --force
+          retry() { for i in 1 2 3; do "$@" && break || { echo "retry $i/3…"; sleep 8; }; done; }
+          retry npm ci --prefer-online
+
+      #--- Supabase CLI ---#
+      - name: 🛠️  Install Supabase CLI 1.158.4
+        run: |
+          curl -sL https://github.com/supabase/cli/releases/download/v1.158.4/supabase_1.158.4_linux_amd64.deb -o sb.deb
+          sudo dpkg -i sb.deb
           supabase --version
-      
-      - name: Login to Supabase
-        run: |
-          supabase login --access-token "${{ secrets.SUPABASE_ACCESS_TOKEN }}"
-      
-      - name: Run validation script
+
+      - name: 🔐 Supabase login (access-token)
+        run: supabase login --access-token "$SUPABASE_ACCESS_TOKEN"
+
+      #--- Auditoria ---#
+      - name: 🧐 Run validation script
         run: npx ts-node scripts/validateQuestions.ts
-      
-      - name: Upload audit log
+
+      #--- Artefato ---#
+      - name: 📤 Upload audit log
+        if: always()                     # garante envio mesmo em falha
         uses: actions/upload-artifact@v4
         with:
           name: audit-log
-          path: audit.log
+          path: |
+            audit.log
           retention-days: 30
-          if-no-files-found: warn
