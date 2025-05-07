@@ -14,7 +14,6 @@ jobs:
       SUPABASE_SERVICE_KEY:  ${{ secrets.SUPABASE_SERVICE_KEY }}
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       DEEPSEEK_API_KEY:      ${{ secrets.DEEPSEEK_API_KEY }}
-      NODE_OPTIONS: --loader ts-node/esm
 
     steps:
       - uses: actions/checkout@v4
@@ -31,15 +30,19 @@ jobs:
           rm -f pnpm-lock.yaml
           pnpm install
 
-      - name: 🧪 Executar validação de questões
+      - name: 🧪 Tenta compilar e executar o script TypeScript
         run: |
-          # Verifica se o package.json tem o tipo definido como module
-          if grep -q '"type": "module"' package.json; then
-            # Para projetos ESM
-            pnpm exec ts-node --esm scripts/validateQuestions.ts
+          # Abordagem 1: Compile primeiro, depois execute
+          echo "Compilando TypeScript para JavaScript..."
+          pnpm tsc scripts/validateQuestions.ts
+          
+          if [ -f "scripts/validateQuestions.js" ]; then
+            echo "Executando o JavaScript compilado..."
+            node scripts/validateQuestions.js
           else
-            # Para projetos CommonJS (padrão)
-            pnpm exec ts-node scripts/validateQuestions.ts
+            # Abordagem 2: Use npx para executar ts-node sem configurações específicas
+            echo "Tentando método alternativo com npx..."
+            npx ts-node scripts/validateQuestions.ts
           fi
         
       - name: 📝 Criar arquivo de log vazio se não existir
