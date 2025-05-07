@@ -2,76 +2,60 @@ import 'dotenv/config';
 import { createClient } from '@supabase/supabase-js';
 import { OpenAI } from 'openai';
 import fs from 'fs';
-import path from 'path';
 
-/* ===== ENV ===== */
-const SUPABASE_URL  = 'https://gjvtncdjcslnkfctqnfy.supabase.co';
-const SUPABASE_KEY  = process.env.SUPABASE_SERVICE_KEY ?? '';
-const DEEPSEEK_KEY  = process.env.DEEPSEEK_API_KEY    ?? '';
+const SUPABASE_URL = 'https://gjvtncdjcslnkfctqnfy.supabase.co';
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY ?? '';
+const DEEPSEEK_KEY = process.env.DEEPSEEK_API_KEY ?? '';
 
-if (!SUPABASE_KEY) throw new Error('SUPABASE_SERVICE_KEY missing');
-if (!DEEPSEEK_KEY) throw new Error('DEEPSEEK_API_KEY missing');
+if (!SUPABASE_KEY || !DEEPSEEK_KEY) process.exit(1);
 
-/* ===== CLIENTS ===== */
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const ai = new OpenAI({ apiKey: DEEPSEEK_KEY, baseURL: 'https://api.deepseek.com/v1' });
 
-/* ===== LOG ===== */
-const logFile = 'audit.log';
-const logStream = fs.createWriteStream(logFile, { flags: 'a' });
-const log = (msg: string) => { console.log(msg); logStream.write(msg + '\n'); };
+const log = fs.createWriteStream('audit.log', { flags: 'a' });
+const out = (m: string) => { console.log(m); log.write(m + '\n'); };
 
-/* ===== PROMPT ===== */
-const SYSTEM_PROMPT = /* (mesmo texto que você já definiu) */ `...`;
+const SYSTEM_PROMPT = `<<COLAR AQUI O PROMPT COMPLETO>>`;
 
-/* ===== MAIN ===== */
-const topic = process.argv.find(a => a.startsWith('--topic='))?.split('=')[1] ?? 'monomios';
+const topic =
+  process.argv.find(a => a.startsWith('--topic='))?.split('=')[1] ?? 'monomios';
 
 (async () => {
-  log(`🔍 ${new Date().toISOString()} · Topic: ${topic}`);
+  out(`🔍 ${new Date().toISOString()} • ${topic}`);
 
-  const { data: qs, error } = await supabase
+  const { data, error } = await supabase
     .from('questions')
     .select('*')
     .eq('topic', topic);
 
-  if (error) throw new Error(error.message);
-  if (!qs?.length) { log('⚠️ Sem questões encontradas'); return; }
+  if (error || !data?.length) { out('sem questões'); process.exit(1); }
 
-  let badWithoutFix = 0;
+  let pending = 0;
 
-  for (const q of qs) {
-    log(`\n▶️ Question ${q.id}`);
+  for (const q of data) {
+    out(`\n${q.id}`);
 
     const payload = {
-      statement:     q.statement_md,
-      options:       q.options,
-      correct_option:q.correct_option,
-      solution:      q.solution_md
+      statement: q.statement_md,
+      options: q.options,
+      correct_option: q.correct_option,
+      solution: q.solution_md,
     };
 
-    /* --- Chamada ao modelo --- */
     const chat = await ai.chat.completions.create({
       model: 'deepseek-reasoner',
       temperature: 0,
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user',   content: JSON.stringify(payload) }
-      ]
+        { role: 'user', content: JSON.stringify(payload) },
+      ],
     });
 
-    const content = chat.choices[0]?.message.content ?? '';
+    const txt = chat.choices[0]?.message.content ?? '';
     let res: any;
-    try { res = JSON.parse(content); } catch {
-      log(`❌ JSON parse error → ${content.slice(0,80)}…`); badWithoutFix++; continue;
-    }
+    try { res = JSON.parse(txt); } catch { out('json error'); pending++; continue; }
 
-    if (res.is_valid) {
-      log(`✅ OK – ${res.reason}`);
-      continue;
-    }
-
-    log(`❌ Inválida – ${res.reason}`);
+    if (res.is_valid) { out('ok'); continue; }
 
     const fix: any = {};
     if (res.fixed_correct_option !== null) fix.correct_option = res.fixed_correct_option;
@@ -79,15 +63,13 @@ const topic = process.argv.find(a => a.startsWith('--topic='))?.split('=')[1] ??
     if (res.fixed_solution_md   !== null) fix.solution_md     = res.fixed_solution_md;
 
     if (Object.keys(fix).length) {
-      const { error: upErr } = await supabase.from('questions').update(fix).eq('id', q.id);
-      if (upErr) { log(`🔴 Update error: ${upErr.message}`); badWithoutFix++; }
-      else       { log('🔧 Corrigido automaticamente'); }
-    } else {
-      badWithoutFix++;
-    }
+      const { error } = await supabase.from('questions').update(fix).eq('id', q.id);
+      if (error) { out('update fail'); pending++; }
+      else out('fixed');
+    } else pending++;
   }
 
-  log(`\n🏁 Processadas ${qs.length}; pendentes ${badWithoutFix}`);
-  logStream.end();
-  if (badWithoutFix) process.exit(1);
+  out(`\n${pending} pendentes`);
+  log.end();
+  process.exit(pending ? 1 : 0);
 })();
