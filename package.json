@@ -24,12 +24,12 @@
   "author": "roneymatusp2 <seuemail@example.com>",
   "license": "ISC",
   "dependencies": {
-    "@supabase/supabase-js": "^2.49.4", // Usando a versão resolvida do lock file
-    "dotenv": "^16.5.0",             // Usando a versão resolvida do lock file
-    "openai": "^4.97.0"              // Usando a versão resolvida do lock file
+    "@supabase/supabase-js": "^2.49.4",
+    "dotenv": "^16.5.0",
+    "openai": "^4.97.0"
   },
   "devDependencies": {
-    "@types/node": "^20.17.43",      // Usando a versão resolvida do lock file
+    "@types/node": "^20.17.43",
     "eslint": "^8.57.0",
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-prettier": "^5.1.3",
@@ -37,8 +37,8 @@
     "@typescript-eslint/parser": "^7.0.0",
     "nodemon": "^3.0.3",
     "prettier": "^3.2.5",
-    "ts-node": "^10.9.2",            // Mantido da sua lockfile
-    "typescript": "^5.8.3"           // Usando a versão resolvida do lock file
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.3"
   },
   "engines": {
     "node": ">=18.0.0"
