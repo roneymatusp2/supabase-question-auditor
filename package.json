@@ -1,43 +1,46 @@
 {
-  "name": "algebraticamente-question-generator",
-  "version": "0.1.0",
-  "description": "Gerador de questões para a plataforma Algebraticamente.",
-  "main": "dist/index.js", // Ou o seu arquivo de entrada principal após o build
-  "type": "module", // Considerando node-fetch v3+ e TypeScript moderno
+  "name": "supabase-question-auditor",
+  "version": "1.0.0",
+  "description": "Auditor de questões utilizando Supabase e OpenAI para a plataforma Algebraticamente.",
+  "main": "dist/index.js",
+  "type": "module",
   "scripts": {
     "start": "node dist/index.js",
-    "dev": "tsc -w & nodemon dist/index.js", // Exemplo, ajuste conforme sua necessidade
+    "dev": "nodemon --watch 'src/**/*.ts' --exec 'ts-node' src/index.ts",
     "build": "tsc",
-    "lint": "eslint . --ext .ts", // Exemplo, se você usar ESLint
+    "lint": "eslint . --ext .ts",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "generate-questions": "node dist/generate-questions-auto.js" // Exemplo, se este for o script
+    "audit:questions": "ts-node src/scripts/audit-questions.ts"
   },
   "keywords": [
-    "algebra",
-    "questions",
-    "generator",
-    "education",
     "supabase",
+    "openai",
+    "auditor",
+    "questions",
+    "education",
+    "typescript",
     "deepseek"
   ],
-  "author": "Seu Nome ou Nome da Organização <seuemail@example.com>", // Preencha com seus dados
-  "license": "ISC", // Ou a licença que você preferir (e.g., "MIT")
+  "author": "roneymatusp2 <seuemail@example.com>",
+  "license": "ISC",
   "dependencies": {
-    "@supabase/supabase-js": "^2.49.4", // Atualizado para a versão resolvida no lock file
-    "dotenv": "^16.4.7", // Atualizado para a versão resolvida no lock file
-    "node-fetch": "^3.3.2", // Mantido como no lock file original
-    "openai": "^4.0.0" // Adicionando openai, pois foi usado no script de curadoria
+    "@supabase/supabase-js": "^2.49.4", // Usando a versão resolvida do lock file
+    "dotenv": "^16.5.0",             // Usando a versão resolvida do lock file
+    "openai": "^4.97.0"              // Usando a versão resolvida do lock file
   },
   "devDependencies": {
-    "@types/node": "^22.14.0", // Atualizado para a versão resolvida no lock file
-    "@types/node-fetch": "^2.6.11", // Adicionando types para node-fetch
-    "typescript": "^5.8.3" // Atualizado para a versão resolvida no lock file
-    // Adicione outros devDependencies como nodemon, eslint, prettier, ts-node, etc.
-    // "nodemon": "^3.0.0",
-    // "eslint": "^8.0.0",
-    // "ts-node": "^10.9.0"
+    "@types/node": "^20.17.43",      // Usando a versão resolvida do lock file
+    "eslint": "^8.57.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-prettier": "^5.1.3",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "nodemon": "^3.0.3",
+    "prettier": "^3.2.5",
+    "ts-node": "^10.9.2",            // Mantido da sua lockfile
+    "typescript": "^5.8.3"           // Usando a versão resolvida do lock file
   },
   "engines": {
-    "node": ">=18.0.0" // Recomendado para compatibilidade com dependências modernas
+    "node": ">=18.0.0"
   }
 }
