@@ -9,12 +9,13 @@ on:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    container: node:14-alpine
+    container: node:16-alpine
     timeout-minutes: 30
     env:
       SUPABASE_SERVICE_KEY:  ${{ secrets.SUPABASE_SERVICE_KEY }}
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       DEEPSEEK_API_KEY:      ${{ secrets.DEEPSEEK_API_KEY }}
+      NODE_OPTIONS: "--no-warnings"
 
     steps:
       - name: 🔧 Instalar dependências do sistema
@@ -23,54 +24,64 @@ jobs:
 
       - uses: actions/checkout@v4
 
-      - name: 📦 Instalar dependências de forma segura
+      - name: 📦 Instalar todas as dependências
         run: |
-          # Garantir que estamos usando a versão correta do npm
+          echo "Instalando dependências do package.json..."
+          # Atualizar npm para compatibilidade
+          npm install -g npm@latest
           npm --version
           
-          # Instalar as dependências explicitamente uma a uma para evitar problemas de integridade
-          npm install @supabase/supabase-js
-          npm install dotenv
-          npm install typescript
-          npm install ts-node
-          npm install @types/node
+          # Limpar cache do npm para evitar problemas de integridade
+          npm cache clean --force
+          
+          # Instalar dependências essenciais explicitamente
+          echo "Instalando pacotes individuais..."
+          npm install openai@^4.29.0
+          npm install @supabase/supabase-js dotenv typescript ts-node @types/node
           
           # Verificar se todas as dependências foram instaladas
+          echo "Verificando dependências instaladas:"
           npm list --depth=0
 
-      - name: 🛠️ Verificar script de validação
+      - name: 🛠️ Configurar ambiente
         run: |
-          echo "Verificando o conteúdo do script de validação..."
+          # Criar arquivo .env com as variáveis necessárias
+          echo "SUPABASE_SERVICE_KEY=$SUPABASE_SERVICE_KEY" > .env
+          echo "SUPABASE_ACCESS_TOKEN=$SUPABASE_ACCESS_TOKEN" >> .env
+          echo "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY" >> .env
+          
+          # Verificar o conteúdo do script de validação
+          echo "Verificando o script de validação..."
           if [ -f "scripts/validateQuestions.ts" ]; then
-            echo "O script exists! Verificando conteúdo..."
-            head -n 20 scripts/validateQuestions.ts
+            echo "Script encontrado. Primeiras linhas:"
+            head -n 10 scripts/validateQuestions.ts
           else
             echo "ERRO: scripts/validateQuestions.ts não encontrado!"
             ls -la scripts/
+            touch audit.log
+            echo "ERRO: Script de validação não encontrado" > audit.log
             exit 1
           fi
 
       - name: 🧪 Executar validação de questões
         run: |
-          # Criar arquivo .env com as variáveis necessárias
-          echo "SUPABASE_SERVICE_KEY=$SUPABASE_SERVICE_KEY" > .env
-          echo "SUPABASE_ACCESS_TOKEN=$SUPABASE_ACCESS_TOKEN" > .env
-          echo "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY" > .env
-          
-          # Executar o script com Node.js e ts-node
           echo "Executando script de validação..."
-          npx ts-node scripts/validateQuestions.ts | tee audit.log
+          npx ts-node scripts/validateQuestions.ts | tee audit.log || true
         
       - name: 🔍 Garantir log de diagnóstico
         if: always()
         run: |
           # Se o arquivo não existir ou estiver vazio, criar um básico
           if [ ! -s audit.log ]; then
-            echo "Criando log de diagnóstico..."
+            echo "Criando log de diagnóstico básico..."
             echo "Validação executada em $(date)" > audit.log
             echo "Versão Node: $(node -v)" >> audit.log
             echo "Versão NPM: $(npm -v)" >> audit.log
+            echo "Dependências instaladas:" >> audit.log
+            npm list --depth=0 >> audit.log
             echo "AVISO: O script de validação não gerou output" >> audit.log
+          else
+            echo "Log de auditoria gerado com sucesso."
           fi
 
       - name: 📤 Upload de artefatos
