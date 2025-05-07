@@ -1,0 +1,4 @@
+#!/bin/sh
+# Sample pre-commit hook
+echo "Running pre-commit hook"
+exit 0
