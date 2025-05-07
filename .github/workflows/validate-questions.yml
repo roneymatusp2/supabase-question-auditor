@@ -17,18 +17,64 @@ jobs:
       DEEPSEEK_API_KEY:      ${{ secrets.DEEPSEEK_API_KEY }}
 
     steps:
+      - name: 🔧 Instalar dependências do sistema
+        run: |
+          apk add --no-cache bash curl git
+
       - uses: actions/checkout@v4
 
-      - name: 📋 Criar log de diagnóstico
+      - name: 📦 Instalar dependências de forma segura
         run: |
-          echo "Validação executada em $(date)" > audit.log
-          echo "Secrets disponíveis: SUPABASE_SERVICE_KEY, SUPABASE_ACCESS_TOKEN, DEEPSEEK_API_KEY" >> audit.log
-          echo "Versão Node: $(node -v)" >> audit.log
-          echo "Versão NPM: $(npm -v)" >> audit.log
-          echo "---------------------------------------" >> audit.log
-          echo "Concluído com sucesso!" >> audit.log
+          # Garantir que estamos usando a versão correta do npm
+          npm --version
+          
+          # Instalar as dependências explicitamente uma a uma para evitar problemas de integridade
+          npm install @supabase/supabase-js
+          npm install dotenv
+          npm install typescript
+          npm install ts-node
+          npm install @types/node
+          
+          # Verificar se todas as dependências foram instaladas
+          npm list --depth=0
+
+      - name: 🛠️ Verificar script de validação
+        run: |
+          echo "Verificando o conteúdo do script de validação..."
+          if [ -f "scripts/validateQuestions.ts" ]; then
+            echo "O script exists! Verificando conteúdo..."
+            head -n 20 scripts/validateQuestions.ts
+          else
+            echo "ERRO: scripts/validateQuestions.ts não encontrado!"
+            ls -la scripts/
+            exit 1
+          fi
+
+      - name: 🧪 Executar validação de questões
+        run: |
+          # Criar arquivo .env com as variáveis necessárias
+          echo "SUPABASE_SERVICE_KEY=$SUPABASE_SERVICE_KEY" > .env
+          echo "SUPABASE_ACCESS_TOKEN=$SUPABASE_ACCESS_TOKEN" > .env
+          echo "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY" > .env
+          
+          # Executar o script com Node.js e ts-node
+          echo "Executando script de validação..."
+          npx ts-node scripts/validateQuestions.ts | tee audit.log
+        
+      - name: 🔍 Garantir log de diagnóstico
+        if: always()
+        run: |
+          # Se o arquivo não existir ou estiver vazio, criar um básico
+          if [ ! -s audit.log ]; then
+            echo "Criando log de diagnóstico..."
+            echo "Validação executada em $(date)" > audit.log
+            echo "Versão Node: $(node -v)" >> audit.log
+            echo "Versão NPM: $(npm -v)" >> audit.log
+            echo "AVISO: O script de validação não gerou output" >> audit.log
+          fi
 
       - name: 📤 Upload de artefatos
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: audit-log
