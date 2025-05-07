@@ -1,91 +1,69 @@
 name: Validate Supabase Questions
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  push:            { branches: [ main ] }
+  pull_request:    { branches: [ main ] }
   workflow_dispatch:
-    inputs:
-      topic:
-        description: 'Topic to validate (default: monomios)'
-        required: false
-        default: 'monomios'
-        type: string
   schedule:
-    - cron: '0 5 * * *'  # Run at 05:00 UTC daily
+    - cron: '0 5 * * *'     # 05:00 UTC
 
 jobs:
   validate:
-    name: Validate and Fix Monomial Questions
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    
+
     env:
       SUPABASE_URL: https://gjvtncdjcslnkfctqnfy.supabase.co
-      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-    
+      SUPABASE_SERVICE_KEY:   ${{ secrets.SUPABASE_SERVICE_KEY }}
+      SUPABASE_ACCESS_TOKEN:  ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      DEEPSEEK_API_KEY:       ${{ secrets.DEEPSEEK_API_KEY }}
+
     steps:
-      - name: Checkout code
+      # 1 ▸ Checkout repository code
+      - name: 📥 Checkout
         uses: actions/checkout@v4
-      
-      - name: Setup Node.js
+
+      # 2 ▸ Setup pnpm (installs the pnpm CLI)
+      # This action installs pnpm and adds it to the PATH.
+      - name: 🏗️ Setup pnpm
+        uses: pnpm/action-setup@v4 # Use v4 for latest features and fixes
+        with:
+          version: 9 # Specify the version of pnpm to use
+
+      # 3 ▸ Setup Node.js
+      # This action installs Node.js and configures caching for pnpm.
+      # It should come AFTER pnpm/action-setup.
+      - name: ⚙️ Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          registry-url: 'https://registry.npmjs.org/'
-      
-      - name: Install dependencies (with retry)
-        run: |
-          # Try installing dependencies with npm ci (maximum 3 retries)
-          max_retries=3
-          retry_count=0
-          
-          while [ $retry_count -lt $max_retries ]; do
-            echo "Attempt $((retry_count + 1))/$max_retries: Installing dependencies with npm ci"
-            npm ci && break
-            
-            echo "npm ci failed, retrying after cleanup..."
-            rm -rf node_modules
-            npm cache clean --force
-            retry_count=$((retry_count + 1))
-            
-            if [ $retry_count -eq $max_retries ]; then
-              echo "All npm ci attempts failed, trying npm install instead..."
-              npm install
-              if [ $? -eq 0 ]; then
-                echo "npm install succeeded."
-                break
-              else
-                echo "npm install also failed, giving up."
-                exit 1
-              fi
-            fi
-          done
-      
-      - name: Install Supabase CLI
+          node-version: 20
+          cache: 'pnpm' # Enable caching for pnpm's store
+
+      # 4 ▸ Install dependencies using pnpm
+      # This step explicitly uses pnpm to install dependencies.
+      - name: 📦 Install dependencies
+        run: pnpm install --frozen-lockfile --registry=https://registry.npmmirror.com/
+
+      # 5 ▸ Install Supabase CLI
+      - name: 🛠️ Install Supabase CLI
         run: |
           curl -sL https://github.com/supabase/cli/releases/download/v1.158.4/supabase_1.158.4_linux_amd64.deb -o sb.deb
           sudo dpkg -i sb.deb
           supabase --version
-      
-      - name: Login to Supabase
-        run: |
-          supabase login --access-token "${{ secrets.SUPABASE_ACCESS_TOKEN }}"
-      
-      - name: Run validation script
-        run: |
-          TOPIC="${{ github.event.inputs.topic || 'monomios' }}"
-          echo "Validating questions with topic: $TOPIC"
-          npx ts-node scripts/validateQuestions.ts --topic=$TOPIC
-      
-      - name: Upload audit log
+
+      # 6 ▸ Login to Supabase CLI
+      - name: 🔐 Supabase login
+        run: supabase login --access-token "$SUPABASE_ACCESS_TOKEN"
+
+      # 7 ▸ Run the audit script using pnpm dlx
+      - name: 🧐 Run audit script
+        run: pnpm dlx ts-node scripts/validateQuestions.ts
+
+      # 8 ▸ Upload audit.log artifact
+      - name: 📤 Upload audit log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: audit-log
           path: audit.log
           retention-days: 30
-          if-no-files-found: warn
