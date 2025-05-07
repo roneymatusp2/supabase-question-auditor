@@ -1,61 +1,56 @@
 name: Validate Supabase Questions
 
 on:
-  push:            { branches: [ main ] }
-  pull_request:    { branches: [ main ] }
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
-  schedule: [ { cron: '0 5 * * *' } ]
+  schedule:
+    - cron: '0 5 * * *'  # Run at 05:00 UTC daily
 
 jobs:
   validate:
+    name: Validate and Fix Monomial Questions
     runs-on: ubuntu-latest
     timeout-minutes: 30
-
+    
     env:
       SUPABASE_URL: https://gjvtncdjcslnkfctqnfy.supabase.co
-      SUPABASE_SERVICE_KEY:   ${{ secrets.SUPABASE_SERVICE_KEY }}
-      SUPABASE_ACCESS_TOKEN:  ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-      DEEPSEEK_API_KEY:       ${{ secrets.DEEPSEEK_API_KEY }}
-
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+    
     steps:
-      # 1 ▸ Código
-      - uses: actions/checkout@v4
-
-      # 2 ▸ Node 20
-      - uses: actions/setup-node@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: 'pnpm'          # habilita cache do pnpm store
-
-      # 3 ▸ pnpm (instalação + install)
-      - name: 📦 Install deps via pnpm
-        uses: pnpm/action-setup@v2
-        with:
-          version: 9              # última LTS
-          run_install: |
-            args: [
-              --frozen-lockfile,
-              --registry=https://registry.npmmirror.com/   # mirror rápido
-            ]
-
-      # 4 ▸ Supabase CLI
-      - name: 🛠️  Supabase CLI
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Install Supabase CLI
         run: |
           curl -sL https://github.com/supabase/cli/releases/download/v1.158.4/supabase_1.158.4_linux_amd64.deb -o sb.deb
           sudo dpkg -i sb.deb
-
-      - name: 🔐 Supabase login
-        run: supabase login --access-token "$SUPABASE_ACCESS_TOKEN"
-
-      # 5 ▸ Script (pnpm dlx = npx do pnpm)
-      - name: 🧐 Run audit script
-        run: pnpm dlx ts-node scripts/validateQuestions.ts
-
-      # 6 ▸ Artefato
-      - name: 📤 Upload audit log
+          supabase --version
+      
+      - name: Login to Supabase
+        run: |
+          supabase login --access-token "${{ secrets.SUPABASE_ACCESS_TOKEN }}"
+      
+      - name: Run validation script
+        run: npx ts-node scripts/validateQuestions.ts
+      
+      - name: Upload audit log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: audit-log
           path: audit.log
           retention-days: 30
+          if-no-files-found: warn
