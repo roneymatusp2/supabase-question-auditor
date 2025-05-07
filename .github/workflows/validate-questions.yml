@@ -1,58 +1,71 @@
+# ───────────────  supabase-question-auditor CI  ───────────────
+# Valida (e corrige) questões de monômios no Supabase
+# Disparadores: push/main, PR → main, manual, cron diário 05 UTC
+
 name: Validate Supabase Questions
+
 on:
-  push:          { branches: [ main ] }
-  pull_request:  { branches: [ main ] }
+  push:            { branches: [ main ] }
+  pull_request:    { branches: [ main ] }
   workflow_dispatch:
   schedule:
-    # 05 h UTC = 02 h BRT
-    - cron: '0 5 * * *'
+    - cron: '0 5 * * *'     # 05:00 UTC ≅ 02:00 BRT
 
 jobs:
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 30      # evita jobs pendurados
+
+    # ─────── Variáveis de ambiente ───────
     env:
-      SUPABASE_URL: https://gjvtncdjcslnkfctqnfy.supabase.co   # adiciona para não depender de dotenv
+      SUPABASE_URL: https://gjvtncdjcslnkfctqnfy.supabase.co
       SUPABASE_SERVICE_KEY:   ${{ secrets.SUPABASE_SERVICE_KEY }}
       SUPABASE_ACCESS_TOKEN:  ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       DEEPSEEK_API_KEY:       ${{ secrets.DEEPSEEK_API_KEY }}
 
     steps:
-      - name: 📥 Checkout repo
+      # 1 ▸ Código do repositório
+      - name: 📥 Checkout
         uses: actions/checkout@v4
 
-      - name: ⚙️  Setup Node.js 20
+      # 2 ▸ Node 20 + cache npm
+      - name: ⚙️  Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
 
-      #--- Mitigar pacotes corrompidos ---#
-      - name: 🧹 Clean npm cache & install deps (3 tentativas)
+      # 3 ▸ Instala dependências com cache limpo e retry
+      - name: 🧹 npm ci (clean + retry)
         run: |
+          set -e
           npm cache clean --force
-          retry() { for i in 1 2 3; do "$@" && break || { echo "retry $i/3…"; sleep 8; }; done; }
-          retry npm ci --prefer-online
+          npm config set fetch-retries 6
+          npm config set fetch-retry-mintimeout 10000
+          npm config set fetch-retry-maxtimeout 120000
+          retry() { for i in 1 2 3; do "$@" && break || { echo "retry $i/3…"; sleep 15; }; done; }
+          retry npm ci --prefer-online --no-audit --progress=false
 
-      #--- Supabase CLI ---#
-      - name: 🛠️  Install Supabase CLI 1.158.4
+      # 4 ▸ Supabase CLI 1.158.4
+      - name: 🛠️  Install Supabase CLI
         run: |
           curl -sL https://github.com/supabase/cli/releases/download/v1.158.4/supabase_1.158.4_linux_amd64.deb -o sb.deb
           sudo dpkg -i sb.deb
           supabase --version
 
-      - name: 🔐 Supabase login (access-token)
+      # 5 ▸ Login no Supabase CLI (para eventuais migrações futuras)
+      - name: 🔐 Supabase login
         run: supabase login --access-token "$SUPABASE_ACCESS_TOKEN"
 
-      #--- Auditoria ---#
-      - name: 🧐 Run validation script
+      # 6 ▸ Executa o script de validação (topic default = monomios)
+      - name: 🧐 Run audit script
         run: npx ts-node scripts/validateQuestions.ts
 
-      #--- Artefato ---#
-      - name: 📤 Upload audit log
-        if: always()                     # garante envio mesmo em falha
+      # 7 ▸ Sobe o audit.log sempre (sucesso ou falha)
+      - name: 📤 Upload audit.log
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: audit-log
-          path: |
-            audit.log
+          path: audit.log
           retention-days: 30
