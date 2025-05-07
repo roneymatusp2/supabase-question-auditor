@@ -1,17 +1,43 @@
 {
-  "name": "supabase-question-auditor",
-  "version": "1.0.0",
-  "type": "module",
+  "name": "algebraticamente-question-generator",
+  "version": "0.1.0",
+  "description": "Gerador de questões para a plataforma Algebraticamente.",
+  "main": "dist/index.js", // Ou o seu arquivo de entrada principal após o build
+  "type": "module", // Considerando node-fetch v3+ e TypeScript moderno
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "audit": "node dist/validateQuestions.js"
+    "start": "node dist/index.js",
+    "dev": "tsc -w & nodemon dist/index.js", // Exemplo, ajuste conforme sua necessidade
+    "build": "tsc",
+    "lint": "eslint . --ext .ts", // Exemplo, se você usar ESLint
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "generate-questions": "node dist/generate-questions-auto.js" // Exemplo, se este for o script
   },
+  "keywords": [
+    "algebra",
+    "questions",
+    "generator",
+    "education",
+    "supabase",
+    "deepseek"
+  ],
+  "author": "Seu Nome ou Nome da Organização <seuemail@example.com>", // Preencha com seus dados
+  "license": "ISC", // Ou a licença que você preferir (e.g., "MIT")
   "dependencies": {
-    "@supabase/supabase-js": "^2.49.4",
-    "dotenv": "^16.5.0",
-    "openai": "^4.97.0"
+    "@supabase/supabase-js": "^2.49.4", // Atualizado para a versão resolvida no lock file
+    "dotenv": "^16.4.7", // Atualizado para a versão resolvida no lock file
+    "node-fetch": "^3.3.2", // Mantido como no lock file original
+    "openai": "^4.0.0" // Adicionando openai, pois foi usado no script de curadoria
   },
   "devDependencies": {
-    "typescript": "^5.8.3"
+    "@types/node": "^22.14.0", // Atualizado para a versão resolvida no lock file
+    "@types/node-fetch": "^2.6.11", // Adicionando types para node-fetch
+    "typescript": "^5.8.3" // Atualizado para a versão resolvida no lock file
+    // Adicione outros devDependencies como nodemon, eslint, prettier, ts-node, etc.
+    // "nodemon": "^3.0.0",
+    // "eslint": "^8.0.0",
+    // "ts-node": "^10.9.0"
+  },
+  "engines": {
+    "node": ">=18.0.0" // Recomendado para compatibilidade com dependências modernas
   }
 }
