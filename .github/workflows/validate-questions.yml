@@ -30,31 +30,10 @@ jobs:
           rm -f pnpm-lock.yaml
           pnpm install
 
-      - name: 🛠️ Install Supabase CLI
+      - name: 🛠️ Install Supabase CLI (método alternativo)
         run: |
-          # Tenta o download da CLI do Supabase com retry e verificação
-          for i in {1..3}; do
-            echo "Tentativa $i para baixar a CLI do Supabase"
-            curl -fsSL --retry 3 --retry-delay 2 --retry-connrefused \
-              https://github.com/supabase/cli/releases/download/v1.158.4/supabase_1.158.4_linux_amd64.deb \
-              -o sb.deb
-            
-            # Verifica se o arquivo baixado é válido
-            if dpkg-deb -I sb.deb &>/dev/null; then
-              echo "Download concluído com sucesso, arquivo válido"
-              sudo dpkg -i sb.deb
-              break
-            else
-              echo "Arquivo baixado inválido, tentando novamente..."
-              rm -f sb.deb
-              # Se for a última tentativa, falha
-              if [ $i -eq 3 ]; then
-                echo "Falha ao baixar a CLI do Supabase após 3 tentativas"
-                exit 1
-              fi
-              sleep 5
-            fi
-          done
+          # Método alternativo: usar NPM para instalar a CLI do Supabase globalmente
+          npm install -g supabase@latest
           
           # Verifica se a CLI foi instalada corretamente
           supabase --version
