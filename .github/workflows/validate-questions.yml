@@ -22,28 +22,29 @@ jobs:
         with:
           node-version: 20
 
-      - run: npm install -g pnpm@9
-
-      - name: 📦 Install deps (regen lockfile)
+      - name: 📦 Instalar dependências com npm
         run: |
-          pnpm config set registry https://registry.npmmirror.com/
-          rm -f pnpm-lock.yaml
-          pnpm install
-
-      - name: 🧪 Tenta compilar e executar o script TypeScript
-        run: |
-          # Abordagem 1: Compile primeiro, depois execute
-          echo "Compilando TypeScript para JavaScript..."
-          pnpm tsc scripts/validateQuestions.ts
+          # Usar npm em vez de pnpm para maior compatibilidade
+          npm ci
           
-          if [ -f "scripts/validateQuestions.js" ]; then
-            echo "Executando o JavaScript compilado..."
-            node scripts/validateQuestions.js
-          else
-            # Abordagem 2: Use npx para executar ts-node sem configurações específicas
-            echo "Tentando método alternativo com npx..."
-            npx ts-node scripts/validateQuestions.ts
-          fi
+          # Garantir que temos typescript e ts-node instalados
+          npm install -g typescript ts-node
+      
+      - name: 🧪 Executar script de validação
+        run: |
+          # Gerar arquivo JavaScript temporário
+          echo "// Script auxiliar para contornar limitações de importação ESM" > run.mjs
+          echo "import { execSync } from 'child_process';" >> run.mjs
+          echo "try {" >> run.mjs
+          echo "  console.log('Executando validação de questões...');" >> run.mjs
+          echo "  execSync('npx ts-node scripts/validateQuestions.ts', { stdio: 'inherit' });" >> run.mjs
+          echo "} catch (error) {" >> run.mjs
+          echo "  console.error('Erro durante a validação:', error);" >> run.mjs
+          echo "  process.exit(1);" >> run.mjs
+          echo "}" >> run.mjs
+          
+          # Executar o script auxiliar
+          node run.mjs
         
       - name: 📝 Criar arquivo de log vazio se não existir
         if: always()
