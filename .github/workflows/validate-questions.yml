@@ -30,10 +30,13 @@ jobs:
           rm -f pnpm-lock.yaml
           pnpm install
 
-      - name: 🛠️ Install Supabase CLI (método alternativo)
+      - name: 🛠️ Install Supabase CLI
         run: |
-          # Método alternativo: usar NPM para instalar a CLI do Supabase globalmente
-          npm install -g supabase@latest
+          # Usa método oficial de instalação para Linux
+          curl -s https://raw.githubusercontent.com/supabase/cli/main/install.sh | bash
+          
+          # Adiciona ao PATH
+          echo "$HOME/.supabase/bin" >> $GITHUB_PATH
           
           # Verifica se a CLI foi instalada corretamente
           supabase --version
@@ -43,6 +46,10 @@ jobs:
 
       - name: 🧪 Executar validação de questões
         run: pnpm dlx ts-node scripts/validateQuestions.ts
+        
+      - name: 📝 Criar arquivo de log vazio se não existir
+        if: always()
+        run: touch audit.log
 
       - if: always()
         uses: actions/upload-artifact@v4
