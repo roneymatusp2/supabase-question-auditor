@@ -20,37 +20,23 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 16
+          cache: 'npm'
 
-      - name: 📦 Instalar dependências com npm
+      - name: 📦 Instalar dependências
+        run: npm ci
+
+      - name: 🧪 Executar validação
         run: |
-          # Usar npm em vez de pnpm para maior compatibilidade
-          npm ci
-          
-          # Garantir que temos typescript e ts-node instalados
-          npm install -g typescript ts-node
-      
-      - name: 🧪 Executar script de validação
-        run: |
-          # Gerar arquivo JavaScript temporário
-          echo "// Script auxiliar para contornar limitações de importação ESM" > run.mjs
-          echo "import { execSync } from 'child_process';" >> run.mjs
-          echo "try {" >> run.mjs
-          echo "  console.log('Executando validação de questões...');" >> run.mjs
-          echo "  execSync('npx ts-node scripts/validateQuestions.ts', { stdio: 'inherit' });" >> run.mjs
-          echo "} catch (error) {" >> run.mjs
-          echo "  console.error('Erro durante a validação:', error);" >> run.mjs
-          echo "  process.exit(1);" >> run.mjs
-          echo "}" >> run.mjs
-          
-          # Executar o script auxiliar
-          node run.mjs
+          # Abordagem simplificada que deve funcionar na maioria dos casos
+          npx -y ts-node-script scripts/validateQuestions.ts
         
-      - name: 📝 Criar arquivo de log vazio se não existir
+      - name: 📝 Criar arquivo de log
         if: always()
         run: touch audit.log
 
-      - if: always()
+      - name: 📤 Upload de artefatos
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: audit-log
