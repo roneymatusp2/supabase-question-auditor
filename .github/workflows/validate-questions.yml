@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      topic:
+        description: 'Topic to validate (default: monomios)'
+        required: false
+        default: 'monomios'
+        type: string
   schedule:
     - cron: '0 5 * * *'  # Run at 05:00 UTC daily
 
@@ -44,7 +50,10 @@ jobs:
           supabase login --access-token "${{ secrets.SUPABASE_ACCESS_TOKEN }}"
       
       - name: Run validation script
-        run: npx ts-node scripts/validateQuestions.ts
+        run: |
+          TOPIC="${{ github.event.inputs.topic || 'monomios' }}"
+          echo "Validating questions with topic: $TOPIC"
+          npx ts-node scripts/validateQuestions.ts --topic=$TOPIC
       
       - name: Upload audit log
         if: always()
