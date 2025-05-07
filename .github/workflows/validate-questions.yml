@@ -1,4 +1,5 @@
 name: Validate Supabase Questions
+
 on:
   push:            { branches: [ main ] }
   pull_request:    { branches: [ main ] }
@@ -17,28 +18,28 @@ jobs:
       DEEPSEEK_API_KEY:       ${{ secrets.DEEPSEEK_API_KEY }}
 
     steps:
-      - name: 📥 Checkout
-        uses: actions/checkout@v4
+      # 1 ▸ Código
+      - uses: actions/checkout@v4
 
-      - name: ⚙️  Node 20
-        uses: actions/setup-node@v4
+      # 2 ▸ Node 20
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
+          cache: 'pnpm'          # habilita cache do pnpm store
 
-      # ←────────── TROCA DE REGISTRY + RETRY ──────────→
-      - name: 🧹 npm ci (mirror + retry)
-        run: |
-          set -e
-          npm cache clean --force
-          npm config set registry https://registry.npmmirror.com/
-          npm config set fetch-retries 6
-          npm config set fetch-retry-mintimeout 10000
-          npm config set fetch-retry-maxtimeout 120000
-          retry() { for i in 1 2 3; do "$@" && break || { echo "retry $i/3…"; sleep 15; }; done; }
-          retry npm ci --prefer-online --no-audit --progress=false
+      # 3 ▸ pnpm (instalação + install)
+      - name: 📦 Install deps via pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 9              # última LTS
+          run_install: |
+            args: [
+              --frozen-lockfile,
+              --registry=https://registry.npmmirror.com/   # mirror rápido
+            ]
 
-      - name: 🛠️  Supabase CLI 1.158.4
+      # 4 ▸ Supabase CLI
+      - name: 🛠️  Supabase CLI
         run: |
           curl -sL https://github.com/supabase/cli/releases/download/v1.158.4/supabase_1.158.4_linux_amd64.deb -o sb.deb
           sudo dpkg -i sb.deb
@@ -46,9 +47,11 @@ jobs:
       - name: 🔐 Supabase login
         run: supabase login --access-token "$SUPABASE_ACCESS_TOKEN"
 
+      # 5 ▸ Script (pnpm dlx = npx do pnpm)
       - name: 🧐 Run audit script
-        run: npx ts-node scripts/validateQuestions.ts
+        run: pnpm dlx ts-node scripts/validateQuestions.ts
 
+      # 6 ▸ Artefato
       - name: 📤 Upload audit log
         if: always()
         uses: actions/upload-artifact@v4
