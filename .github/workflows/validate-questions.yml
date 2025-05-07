@@ -30,20 +30,6 @@ jobs:
           rm -f pnpm-lock.yaml
           pnpm install
 
-      - name: 🛠️ Install Supabase CLI
-        run: |
-          # Usa método oficial de instalação para Linux
-          curl -s https://raw.githubusercontent.com/supabase/cli/main/install.sh | bash
-          
-          # Adiciona ao PATH
-          echo "$HOME/.supabase/bin" >> $GITHUB_PATH
-          
-          # Verifica se a CLI foi instalada corretamente
-          supabase --version
-
-      - name: 🔑 Login no Supabase
-        run: supabase login --access-token "$SUPABASE_ACCESS_TOKEN"
-
       - name: 🧪 Executar validação de questões
         run: pnpm dlx ts-node scripts/validateQuestions.ts
         
