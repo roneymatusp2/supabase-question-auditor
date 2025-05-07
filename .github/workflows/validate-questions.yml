@@ -9,87 +9,38 @@ on:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     env:
       SUPABASE_SERVICE_KEY:  ${{ secrets.SUPABASE_SERVICE_KEY }}
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       DEEPSEEK_API_KEY:      ${{ secrets.DEEPSEEK_API_KEY }}
-      NODE_OPTIONS: "--no-warnings"
 
     steps:
-      - name: Checkout código
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: 🛠️ Configurar Node.js e npm
-        uses: actions/setup-node@v4
+      # Node 20 (mais novo, sem cache npm/pnpm)
+      - uses: actions/setup-node@v4
         with:
-          node-version: '18' # Usar Node.js 18 LTS, que vem com npm 8+
-          cache: 'npm'
+          node-version: 20
 
-      - name: 📋 Verificar versões
-        run: |
-          node -v
-          npm -v
+      # Instala ts-node + ts em modo global
+      - run: npm i -g ts-node typescript
 
-      - name: 📦 Instalar dependências
-        run: |
-          echo "Limpando cache do npm e package-lock.json antigo (se existir)..."
-          npm cache clean --force
-          rm -f package-lock.json
-          
-          echo "Instalando dependências do package.json..."
-          # Usar --legacy-peer-deps para compatibilidade com dependências mais antigas
-          npm install --legacy-peer-deps
-          
-          echo "Verificando dependências instaladas:"
-          npm list --depth=0 || echo "Falha ao listar dependências, mas continuando..."
+      # Instala supabase-js e openai (direto, poucas deps → evita lockfile)
+      - run: npm i @supabase/supabase-js dotenv openai
 
-      - name: 🛠️ Configurar ambiente para o script
-        run: |
-          echo "Criando arquivo .env com as variáveis de ambiente..."
-          echo "SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}" > .env
-          echo "SUPABASE_ACCESS_TOKEN=${SUPABASE_ACCESS_TOKEN}" >> .env
-          echo "DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}" >> .env
-          
-          echo "Verificando o script de validação..."
-          if [ ! -f "scripts/validateQuestions.ts" ]; then
-            echo "ERRO CRÍTICO: scripts/validateQuestions.ts não encontrado!"
-            ls -la .
-            ls -la scripts/
-            echo "ERRO: Script de validação não encontrado." > audit.log
-            exit 1
-          fi
-          echo "Script encontrado. Primeiras linhas:"
-          head -n 10 scripts/validateQuestions.ts
+      # Supabase CLI
+      - run: |
+          curl -sL https://github.com/supabase/cli/releases/download/v1.158.4/supabase_1.158.4_linux_amd64.deb -o sb.deb
+          sudo dpkg -i sb.deb
 
-      - name: 🧪 Executar validação de questões
-        run: |
-          echo "Executando script de validação (scripts/validateQuestions.ts)..."
-          # Se ts-node estiver listado como dependência no package.json, npx o usará.
-          npx ts-node scripts/validateQuestions.ts | tee audit.log
-          # Mesmo que o script falhe (exit code != 0), o workflow continuará para capturar o log.
-          echo "Execução do script concluída (status: $?)."
-        continue-on-error: true # Permite que o job continue para upload do log mesmo se o script falhar
-        
-      - name: 🔍 Garantir log de diagnóstico
-        if: always() # Executar sempre, mesmo se passos anteriores falharem
-        run: |
-          if [ ! -s audit.log ]; then
-            echo "Criando log de diagnóstico básico porque audit.log está vazio ou não existe..."
-            echo "Validação executada em $(date)" > audit.log
-            echo "Versão Node: $(node -v)" >> audit.log
-            echo "Versão NPM: $(npm -v)" >> audit.log
-            echo "Dependências instaladas (tentativa de listagem):" >> audit.log
-            npm list --depth=0 >> audit.log || echo "Não foi possível listar dependências." >> audit.log
-            echo "AVISO: O script de validação não gerou output ou falhou antes de gerar audit.log." >> audit.log
-          else
-            echo "Log de auditoria (audit.log) gerado pelo script ou preenchido anteriormente."
-          fi
-          echo "Conteúdo final do audit.log:"
-          cat audit.log
+      - run: supabase login --access-token "$SUPABASE_ACCESS_TOKEN"
 
-      - name: 📤 Upload de artefatos
-        if: always()
+      # Executa o script usando o loader ESM do ts-node
+      - name: Run audit
+        run: node --loader ts-node/esm scripts/validateQuestions.ts
+
+      - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: audit-log
