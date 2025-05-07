@@ -3,16 +3,15 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "audit": "ts-node scripts/validateQuestions.ts"
-  },
-  "devDependencies": {
-    "@types/node": "^20.11.19",
-    "ts-node": "^10.9.2",
-    "typescript": "^5.4.3"
+    "build": "tsc -p tsconfig.json",
+    "audit": "node dist/validateQuestions.js"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.38.1",
-    "dotenv": "^16.4.5",
-    "openai": "^4.29.0"
+    "@supabase/supabase-js": "^2.49.4",
+    "dotenv": "^16.5.0",
+    "openai": "^4.97.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
   }
 }
