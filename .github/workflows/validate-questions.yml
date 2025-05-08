@@ -41,20 +41,19 @@ jobs:
 
       - name: Install dependencies
         run: |
-          echo "🔄 Sincronizando dependências..."
-          rm -rf node_modules
-          npm install
+          echo "Installing dependencies..."
+          npm ci
 
       - name: Build TypeScript
         run: npm run build
 
       - name: Setup Supabase CLI
         run: |
-          echo "🔧 Instalando Supabase CLI..."
+          echo "Installing Supabase CLI..."
           curl -sL https://github.com/supabase/cli/releases/download/v1.158.4/supabase_1.158.4_linux_amd64.deb -o sb.deb
           sudo dpkg -i sb.deb
           rm sb.deb
-          echo "🔑 Efetuando login no Supabase CLI..."
+          echo "Logging in to Supabase CLI..."
           echo "${{ secrets.SUPABASE_ACCESS_TOKEN }}" | supabase login
 
       - name: Run audit script

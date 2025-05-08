@@ -10,7 +10,7 @@
     "build": "tsc",
     "lint": "eslint . --ext .ts",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "audit:questions": "ts-node src/scripts/audit-questions.ts"
+    "audit:questions": "node dist/scripts/audit-questions.js"
   },
   "keywords": [
     "supabase",

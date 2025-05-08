@@ -25,7 +25,11 @@ cd supabase-question-auditor
 cp .env.example .env
 ```
 
-Edit the `.env` file and replace the placeholder for `SUPABASE_SERVICE_KEY` with your actual Supabase service role key.
+Edit the `.env` file and replace the placeholders:
+- `SUPABASE_URL` - Your Supabase project URL
+- `SUPABASE_SERVICE_KEY` - Your Supabase service role key
+- `SUPABASE_ACCESS_TOKEN` - Your Supabase access token
+- `DEEPSEEK_API_KEY` - Your DeepSeek API key
 
 ### 3. Install Dependencies
 
@@ -33,17 +37,19 @@ Edit the `.env` file and replace the placeholder for `SUPABASE_SERVICE_KEY` with
 npm ci
 ```
 
-### 4. Run the Validation Locally
+### 4. Build the TypeScript Project
 
 ```bash
-npm run audit
+npm run build
 ```
 
-By default, the script audits questions with the topic "monomios". To audit a different topic, use:
+### 5. Run the Validation Locally
 
 ```bash
-npm run audit -- --topic=another_topic
+npm run audit:questions
 ```
+
+By default, the script audits questions with the topic "monomio". To audit a different topic, you can modify the source code.
 
 ## GitHub Actions Configuration
 
@@ -63,6 +69,7 @@ To enable GitHub Actions, add the following secrets in your repository:
 
 | Name | Description |
 |------|-------------|
+| `SUPABASE_URL` | Your Supabase project URL |
 | `SUPABASE_SERVICE_KEY` | Your Supabase project's service role key |
 | `SUPABASE_ACCESS_TOKEN` | Supabase access token for CLI operations |
 | `DEEPSEEK_API_KEY` | DeepSeek API key for AI validation |
@@ -72,51 +79,28 @@ To enable GitHub Actions, add the following secrets in your repository:
 The workflow will run automatically, and you'll see output similar to this in the Actions tab:
 
 ```
-🔍 Starting validation at 2025-05-06T05:00:12.345Z
-📚 Topic: monomios
-📋 Found 15 questions to validate
-
-🔢 Processing question ID: 1
-✅ Question ID 1 is valid: The question is mathematically accurate as it correctly identifies the coefficient in a monomi...
-
-🔢 Processing question ID: 2
-❌ Question ID 2 is invalid: The question has an incorrect answer marked. The degree of the monomial 3x²y is actually 3...
-🔧 Applying fixes to question ID: 2
-✏️ Updated correct_option to: 1
-✔️ Successfully updated question ID: 2
-
+==== Starting Question Validation (monomios) ====
+[2025-05-07T12:00:00.000Z] Found 15 questions with topic="monomio". Starting analysis...
+[2025-05-07T12:00:01.234Z] [ID: 1] OK - Correction applied!
+[2025-05-07T12:00:02.345Z] [ID: 2] No changes needed.
 ...
-
-🏁 Validation complete for topic 'monomios'
-📊 Summary: 15 questions processed, 0 invalid without fixes
-✅ All questions are valid or were automatically fixed
+[2025-05-07T12:00:15.678Z] ==== End of validation! ====
 ```
 
-## Modifying the Script
+## Implementation Details
 
-### Changing the Topic to Audit
+The main implementation is in two TypeScript files:
 
-To audit questions with a different topic, modify the script execution in one of these ways:
+1. `src/scripts/validateQuestions.ts` - The core logic for fetching, validating, and updating questions
+2. `src/scripts/audit-questions.ts` - A small wrapper that imports and executes the validation script
 
-1. **Command line argument**:
-   ```bash
-   npm run audit -- --topic=new_topic
-   ```
+The validation process:
 
-2. **GitHub Actions workflow**:
-   Edit `.github/workflows/validate-questions.yml` and change:
-   ```yaml
-   - name: Run validation script
-     run: npx ts-node scripts/validateQuestions.ts --topic=new_topic
-   ```
-
-### Modifying the Validation Logic
-
-The validation logic is defined in the `systemPrompt` variable in `scripts/validateQuestions.ts`. You can modify this to:
-
-- Change the validation criteria
-- Adjust how fixes are applied
-- Update the examples of valid and invalid questions
+1. Connects to Supabase and retrieves questions with topic="monomio"
+2. For each question, sends it to DeepSeek Reasoner via the OpenAI-compatible API
+3. Processes DeepSeek's response to extract corrections
+4. Updates the question in Supabase if corrections are needed
+5. Logs all activity to a file named `curation-audit.log`
 
 ## Logs and Artifacts
 
@@ -132,3 +116,13 @@ After running GitHub Actions, an artifact called `audit-log` will be available w
 - **Missing Questions**: Ensure your Supabase database has questions with the topic you're auditing.
 - **Authentication Errors**: Verify your Supabase service key and access token are correctly configured.
 - **API Limits**: If you encounter DeepSeek API rate limits, consider adding delays between requests.
+- **JSON Parsing Errors**: If DeepSeek returns unexpected formats, check the regex parsing in the validateQuestions.ts file.
+
+## Further Customization
+
+To adjust the behavior of the auditor:
+
+1. Modify the prompt for DeepSeek in the `buildPrompt()` function
+2. Update the table name, filters, or fields in the Supabase queries
+3. Change the topic filter in `fetchQuestionsForTopic()` function
+4. Adjust logging format or verbosity in the `log()` function
