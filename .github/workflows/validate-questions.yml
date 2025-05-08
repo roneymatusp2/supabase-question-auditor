@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/validate-questions.yml'
-      - 'src/scripts/audit-questions.ts'
+      - 'src/**/*'
       - 'tsconfig.json'
       - 'package.json'
       - 'package-lock.json'
