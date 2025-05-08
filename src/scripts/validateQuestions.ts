@@ -116,6 +116,39 @@ interface AICurationResponse {
     remarks?: string;
 }
 
+/* ─── Funções Utilitárias ────────────────────────────────────────────────── */
+
+// Função para sanitizar strings antes de enviar para a API
+function sanitizeString(str: string): string {
+    if (!str) return '';
+    
+    // Remove caracteres de escape problemáticos
+    return str
+        .replace(/\\(?!["\\/bfnrt])/g, '\\\\') // Escapa barras invertidas solitárias
+        .replace(/\n/g, '\\n')                 // Substitui quebras de linha por \n
+        .replace(/\r/g, '\\r')                 // Substitui retornos de carro por \r
+        .replace(/\t/g, '\\t')                 // Substitui tabs por \t
+        .replace(/"/g, '\\"');                 // Escapa aspas duplas
+}
+
+// Função para sanitizar um objeto completo 
+function sanitizeObject(obj: any): any {
+    if (typeof obj === 'string') {
+        return sanitizeString(obj);
+    } else if (Array.isArray(obj)) {
+        return obj.map(item => sanitizeObject(item));
+    } else if (obj && typeof obj === 'object') {
+        const result: Record<string, any> = {};
+        for (const key in obj) {
+            if (Object.prototype.hasOwnProperty.call(obj, key)) {
+                result[key] = sanitizeObject(obj[key]);
+            }
+        }
+        return result;
+    }
+    return obj;
+}
+
 /* ─── Funções de Banco de Dados ──────────────────────────────────────────── */
 async function fetchQuestionsForTopic(topic: string): Promise<QuestionRecord[]> {
     L(`🔍 Buscando questões para o tópico: ${topic}`);
@@ -154,20 +187,70 @@ async function updateQuestionInSupabase(questionId: string, updates: Partial<Que
 /* ─── Interação com a IA ────────────────────────────────────────────────── */
 async function getCurationFromAI(question: QuestionRecord): Promise<AICurationResponse | null> {
     L(`🤖 Solicitando curadoria para a questão ID ${question.id}...`);
-    const payload = {
-        statement: question.statement_md,
-        options: question.options,
-        correct_option: question.correct_option,
-        solution: question.solution_md
-    };
-
+    
     try {
+        // Cria um payload sanitizado para evitar problemas de JSON
+        const sanitizedPayload = {
+            statement: sanitizeObject(question.statement_md),
+            options: sanitizeObject(question.options),
+            correct_option: question.correct_option,
+            solution: sanitizeObject(question.solution_md)
+        };
+
+        // Verifica se o JSON é válido antes de enviar
+        try {
+            JSON.stringify(sanitizedPayload);
+        } catch (jsonError: any) {
+            L(`⚠️ Erro ao criar JSON válido para a questão ID ${question.id}: ${jsonError?.message}`);
+            
+            // Usa uma abordagem mais rigorosa de sanitização como fallback
+            const fallbackPayload = {
+                statement: typeof question.statement_md === 'string' 
+                    ? question.statement_md.replace(/[\u0000-\u001F\u007F-\u009F\\"]/g, '')
+                    : '',
+                options: Array.isArray(question.options)
+                    ? question.options.map(opt => typeof opt === 'string' 
+                        ? opt.replace(/[\u0000-\u001F\u007F-\u009F\\"]/g, '')
+                        : '')
+                    : [],
+                correct_option: question.correct_option,
+                solution: typeof question.solution_md === 'string'
+                    ? question.solution_md.replace(/[\u0000-\u001F\u007F-\u009F\\"]/g, '')
+                    : ''
+            };
+            
+            // Tenta novamente com o payload de fallback
+            const chatCompletion = await deepSeekAI.chat.completions.create({
+                model: AI_MODEL,
+                temperature: 0,
+                messages: [
+                    { role: 'system', content: SYSTEM_PROMPT_MONOMIOS },
+                    { role: 'user', content: JSON.stringify(fallbackPayload) }
+                ]
+            });
+            
+            const rawResponse = chatCompletion.choices[0]?.message.content;
+            if (!rawResponse) {
+                L(`❌ Resposta da IA vazia para a questão ID ${question.id}.`);
+                return null;
+            }
+            
+            const jsonMatch = rawResponse.match(/\{[\s\S]*\}/);
+            if (jsonMatch && jsonMatch[0]) {
+                return JSON.parse(jsonMatch[0]) as AICurationResponse;
+            } else {
+                L(`❌ Resposta inválida recebida: ${rawResponse}`);
+                return null;
+            }
+        }
+        
+        // Se o JSON for válido, prossegue com a chamada normal
         const chatCompletion = await deepSeekAI.chat.completions.create({
             model: AI_MODEL,
             temperature: 0,
             messages: [
                 { role: 'system', content: SYSTEM_PROMPT_MONOMIOS },
-                { role: 'user', content: JSON.stringify(payload) }
+                { role: 'user', content: JSON.stringify(sanitizedPayload) }
             ]
         });
 
@@ -186,6 +269,51 @@ async function getCurationFromAI(question: QuestionRecord): Promise<AICurationRe
         }
     } catch (error: any) {
         L(`❌ Erro na API DeepSeek: ${error?.message || 'Erro desconhecido'}`);
+        
+        // Adiciona retry com um delay para lidar com erros temporários
+        if (error?.message?.includes('Bad escaped character in JSON')) {
+            L(`⏳ Tentando novamente com método alternativo para a questão ID ${question.id}...`);
+            try {
+                // Abordagem alternativa sem uso de JSON.stringify
+                const simplePayload = {
+                    statement: "Revisar esta questão de monômio.",
+                    context: `Enunciado: ${question.statement_md || ''}
+                    Opções: ${question.options ? question.options.join(' | ') : ''}
+                    Resposta correta: ${question.correct_option}
+                    Solução/dica: ${question.solution_md || ''}`
+                };
+                
+                // Espera 2 segundos antes de tentar novamente
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                
+                const chatCompletion = await deepSeekAI.chat.completions.create({
+                    model: AI_MODEL,
+                    temperature: 0,
+                    messages: [
+                        { role: 'system', content: SYSTEM_PROMPT_MONOMIOS },
+                        { role: 'user', content: JSON.stringify(simplePayload) }
+                    ]
+                });
+                
+                const rawResponse = chatCompletion.choices[0]?.message.content;
+                if (!rawResponse) {
+                    L(`❌ Retry: Resposta da IA vazia para a questão ID ${question.id}.`);
+                    return null;
+                }
+                
+                const jsonMatch = rawResponse.match(/\{[\s\S]*\}/);
+                if (jsonMatch && jsonMatch[0]) {
+                    return JSON.parse(jsonMatch[0]) as AICurationResponse;
+                } else {
+                    L(`❌ Retry: Resposta inválida recebida: ${rawResponse}`);
+                    return null;
+                }
+            } catch (retryError: any) {
+                L(`❌ Retry falhou para a questão ID ${question.id}: ${retryError?.message || 'Erro desconhecido'}`);
+                return null;
+            }
+        }
+        
         return null;
     }
 }
