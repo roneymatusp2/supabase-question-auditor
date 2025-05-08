@@ -50,10 +50,13 @@ jobs:
       - name: Setup Supabase CLI
         run: |
           echo "Installing Supabase CLI..."
-          # Use a more reliable installation method directly from NPM
-          npm install -g supabase
+          # Install as a project dependency as recommended by Supabase
+          npm install supabase --save-dev
+          # Add npx to path to ensure we can run supabase commands
+          echo "$(npm bin)" >> $GITHUB_PATH
+          # Login to Supabase
           echo "Logging in to Supabase CLI..."
-          echo "${{ secrets.SUPABASE_ACCESS_TOKEN }}" | supabase login
+          echo "${{ secrets.SUPABASE_ACCESS_TOKEN }}" | npx supabase login
 
       - name: Run audit script
         run: npm run audit:questions
