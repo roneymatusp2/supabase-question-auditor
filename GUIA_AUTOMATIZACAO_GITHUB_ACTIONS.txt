@@ -1,0 +1,507 @@
+# GUIA PARA AUTOMATIZAÇÃO COM GITHUB ACTIONS
+
+Este guia explica como implementar automações eficientes usando GitHub Actions, com base nas técnicas aplicadas no projeto Supabase Question Auditor.
+
+## 1. ESTRUTURA BÁSICA DE UM WORKFLOW DO GITHUB ACTIONS
+
+### Localização e Nome do Arquivo
+
+Os workflows do GitHub Actions são definidos em arquivos YAML localizados na pasta `.github/workflows/` do seu repositório. Exemplo:
+```
+.github/workflows/validate-questions.yml
+```
+
+### Estrutura do Arquivo YAML
+
+```yaml
+name: 'Nome da sua Automação'
+
+# Definindo quando a automação será executada
+on:
+  push:                       # Executa ao fazer push
+    branches: [main]          # Apenas na branch main
+    paths:                    # Apenas quando estes arquivos mudarem
+      - 'src/**/*'
+      - 'package.json'
+  pull_request:               # Executa em pull requests
+    branches: [main]
+  schedule:                   # Executa em um cronograma
+    - cron: '0 5 * * *'       # Às 5h UTC todos os dias (formato cron)
+  workflow_dispatch:          # Permite execução manual
+
+jobs:
+  job_principal:              # Nome do job
+    runs-on: ubuntu-latest    # Sistema operacional
+    timeout-minutes: 60       # Timeout do job
+
+    env:                      # Variáveis de ambiente
+      VARIAVEL_1: ${{ secrets.NOME_DO_SEGREDO }}
+      VARIAVEL_2: valor_fixo
+
+    steps:                    # Lista de passos a executar
+      - name: Checkout do código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: Instalar dependências
+        run: npm ci
+        
+      - name: Executar script principal
+        run: npm run meu-script
+        
+      - name: Criar artefato de log
+        if: always()  # Executa mesmo se houver falhas anteriores
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs
+          path: meu-arquivo-log.log
+          retention-days: 30
+```
+
+## 2. USO DE SECRETS (SEGREDOS)
+
+### Como Configurar Secrets
+
+1. Vá para seu repositório no GitHub
+2. Navegue para **Settings** → **Secrets and Variables** → **Actions**
+3. Clique em **New repository secret**
+4. Adicione nome e valor do segredo
+
+### Como Usar Secrets em Workflows
+
+```yaml
+env:
+  API_KEY: ${{ secrets.API_KEY }}
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+```
+
+Importante: Nunca armazene chaves de API ou credenciais diretamente no código!
+
+## 3. EXECUTANDO SCRIPTS PERSONALIZADOS
+
+### Preparando seu Projeto
+
+1. Adicione os scripts ao package.json:
+```json
+{
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "meu-script": "node dist/scripts/meu-script.js"
+  }
+}
+```
+
+2. Adicione os scripts ao workflow:
+```yaml
+steps:
+  - name: Compilar TypeScript
+    run: npm run build
+    
+  - name: Executar script
+    run: npm run meu-script
+```
+
+### Passando Argumentos para Scripts
+
+Para passar argumentos para scripts, use o formato:
+
+```yaml
+- name: Executar com argumentos
+  run: npm run meu-script -- --parametro1=valor1 --parametro2=valor2
+```
+
+No script, acesse via `process.argv`:
+```typescript
+const parametro1 = process.argv.find(arg => arg.startsWith('--parametro1='))?.split('=')[1];
+```
+
+## 4. GERENCIANDO MÚLTIPLAS VARIÁVEIS DE AMBIENTE
+
+### Padrão de Nomenclatura
+
+Use um padrão consistente para nomear variáveis relacionadas:
+```
+API_KEY_1
+API_KEY_2
+API_KEY_3
+```
+
+### Configurando no GitHub
+
+1. Adicione cada segredo separadamente no GitHub
+2. No workflow, use-os assim:
+```yaml
+env:
+  API_KEY_1: ${{ secrets.API_KEY_1 }}
+  API_KEY_2: ${{ secrets.API_KEY_2 }}
+  API_KEY_3: ${{ secrets.API_KEY_3 }}
+```
+
+### Acessando no Código
+
+```typescript
+const apiKeys = [
+    process.env.API_KEY_1,
+    process.env.API_KEY_2,
+    process.env.API_KEY_3
+].filter(Boolean) as string[];
+```
+
+## 5. OTIMIZANDO COM CACHE
+
+### Cacheando Dependências
+
+```yaml
+- name: Configurar Node.js com cache
+  uses: actions/setup-node@v4
+  with:
+    node-version: '20'
+    cache: 'npm'  # Automaticamente cacheia node_modules
+```
+
+### Cache Personalizado
+
+```yaml
+- name: Cache personalizado
+  uses: actions/cache@v3
+  with:
+    path: minha-pasta-de-cache
+    key: cache-${{ runner.os }}-${{ hashFiles('**/arquivo-de-hash.txt') }}
+```
+
+## 6. ARMAZENANDO ARTEFATOS
+
+### Salvando Logs e Resultados
+
+```yaml
+- name: Salvar artefatos
+  uses: actions/upload-artifact@v4
+  with:
+    name: resultados
+    path: |
+      logs/*.log
+      resultados/*.json
+    retention-days: 30
+```
+
+### Baixando Artefatos em Outros Jobs
+
+```yaml
+- name: Download de artefatos
+  uses: actions/download-artifact@v4
+  with:
+    name: resultados
+    path: ./downloads
+```
+
+## 7. CONFIGURANDO CRON JOBS
+
+### Sintaxe Cron
+
+```
+┌───────────── minuto (0 - 59)
+│ ┌───────────── hora (0 - 23)
+│ │ ┌───────────── dia do mês (1 - 31)
+│ │ │ ┌───────────── mês (1 - 12 ou JAN-DEZ)
+│ │ │ │ ┌───────────── dia da semana (0 - 6 ou DOM-SAB)
+│ │ │ │ │
+│ │ │ │ │
+* * * * *
+```
+
+### Exemplos Comuns
+
+```yaml
+schedule:
+  - cron: '0 0 * * *'    # Todo dia à meia-noite UTC
+  - cron: '0 */6 * * *'  # A cada 6 horas
+  - cron: '0 0 * * 1'    # Toda segunda-feira à meia-noite
+  - cron: '0 0 1 * *'    # Primeiro dia de cada mês
+```
+
+## 8. NOTIFICAÇÕES E RELATÓRIOS
+
+### Enviando Resultados por Email
+
+Você pode usar o GitHub Action para enviar emails:
+
+```yaml
+- name: Enviar email com resultado
+  uses: dawidd6/action-send-mail@v3
+  with:
+    server_address: smtp.gmail.com
+    server_port: 465
+    username: ${{ secrets.EMAIL_USERNAME }}
+    password: ${{ secrets.EMAIL_PASSWORD }}
+    subject: Resultado da Automação
+    body: Veja o relatório anexo
+    to: seu-email@exemplo.com
+    from: Github Actions
+    attachments: ./relatorio.txt
+```
+
+### Criando Issues no GitHub
+
+```yaml
+- name: Criar issue para falhas
+  if: failure()
+  uses: actions/github-script@v6
+  with:
+    github-token: ${{ secrets.GITHUB_TOKEN }}
+    script: |
+      github.rest.issues.create({
+        owner: context.repo.owner,
+        repo: context.repo.repo,
+        title: 'Falha na automação: ' + new Date().toISOString(),
+        body: 'A automação falhou. Veja os logs para mais detalhes.'
+      })
+```
+
+## 9. WORKFLOWS PARALELOS E MATRICIAIS
+
+### Jobs Paralelos
+
+```yaml
+jobs:
+  job1:
+    runs-on: ubuntu-latest
+    steps: [...]
+    
+  job2:
+    runs-on: ubuntu-latest
+    steps: [...]
+```
+
+### Jobs com Dependências
+
+```yaml
+jobs:
+  job1:
+    runs-on: ubuntu-latest
+    steps: [...]
+    
+  job2:
+    needs: job1  # Só executa após job1 concluir
+    runs-on: ubuntu-latest
+    steps: [...]
+```
+
+### Matrizes de Execução
+
+```yaml
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [16, 18, 20]
+        topic: ['monomios', 'polinomios', 'funcoes']
+    
+    steps:
+      - name: Configurar Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          
+      - name: Executar script para tópico ${{ matrix.topic }}
+        run: npm run script -- --topic=${{ matrix.topic }}
+```
+
+## 10. MELHORES PRÁTICAS
+
+### Segurança
+
+- Nunca armazene segredos no código
+- Use secrets para todas as credenciais
+- Prefira ambientes restritos (runner isolados)
+- Limite permissões (use GITHUB_TOKEN quando possível)
+
+### Performance
+
+- Use cache para dependências
+- Limite a execução do workflow a mudanças relevantes (com `paths:`)
+- Execute jobs em paralelo quando possível
+- Use checkout com `fetch-depth` limitado se não precisar do histórico completo
+
+### Manutenção
+
+- Comente seu workflow para facilitar futuras alterações
+- Use nomes descritivos para jobs e passos
+- Documente os segredos necessários
+- Mantenha um log de alterações no workflow
+
+### Robustez
+
+- Implemente tratamento de erros nos scripts
+- Use `if: always()` para passos críticos que devem executar mesmo em falhas
+- Configure timeouts adequados para evitar execuções infinitas
+- Adicione verificações de saúde antes de passos críticos
+
+## 11. EXEMPLO DE CASO DE USO: VALIDAÇÃO COM MÚLTIPLAS APIS
+
+Para criar uma automação que usa múltiplas chaves de API (como no Supabase Question Auditor):
+
+### 1. Configuração de Secrets
+
+Configure os secrets no GitHub:
+- API_KEY_1
+- API_KEY_2
+- API_KEY_3
+- API_KEY_4
+- API_KEY_5
+
+### 2. Workflow YAML
+
+```yaml
+name: 'Validação com Múltiplas APIs'
+
+on:
+  schedule:
+    - cron: '0 5 * * *'  # Executar às 5h UTC diariamente
+  workflow_dispatch:     # Permitir execução manual
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    
+    env:
+      API_KEY_1: ${{ secrets.API_KEY_1 }}
+      API_KEY_2: ${{ secrets.API_KEY_2 }}
+      API_KEY_3: ${{ secrets.API_KEY_3 }}
+      API_KEY_4: ${{ secrets.API_KEY_4 }}
+      API_KEY_5: ${{ secrets.API_KEY_5 }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+        
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          
+      - name: Instalar dependências
+        run: npm ci
+        
+      - name: Compilar TypeScript
+        run: npm run build
+        
+      - name: Executar validação
+        run: npm run validar -- --topic=meu-topico
+        
+      - name: Salvar logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-validacao
+          path: validacao.log
+          retention-days: 30
+```
+
+### 3. Implementação no Código
+
+```typescript
+// Carregar todas as chaves de API disponíveis
+const apiKeys = [
+    process.env.API_KEY_1,
+    process.env.API_KEY_2,
+    process.env.API_KEY_3,
+    process.env.API_KEY_4,
+    process.env.API_KEY_5
+].filter(Boolean) as string[];
+
+console.log(`Usando ${apiKeys.length} chaves de API`);
+
+// Implementar um mecanismo de alternância entre chaves
+let currentKeyIndex = 0;
+
+function getNextApiKey(): string {
+    const key = apiKeys[currentKeyIndex];
+    currentKeyIndex = (currentKeyIndex + 1) % apiKeys.length;
+    return key;
+}
+
+// Implementar lógica de retry com múltiplas chaves
+async function callApiWithRetry(data: any, maxRetries = 3): Promise<any> {
+    let retries = 0;
+    let lastError;
+    
+    while (retries < maxRetries) {
+        try {
+            const apiKey = getNextApiKey();
+            const response = await fetch('https://api.example.com/endpoint', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${apiKey}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(data)
+            });
+            
+            if (!response.ok) {
+                throw new Error(`API respondeu com status ${response.status}`);
+            }
+            
+            return await response.json();
+        } catch (error) {
+            lastError = error;
+            retries++;
+            console.error(`Tentativa ${retries} falhou, tentando próxima chave API...`);
+            // Espera um pouco antes de tentar novamente
+            await new Promise(r => setTimeout(r, 1000 * retries));
+        }
+    }
+    
+    throw lastError;
+}
+```
+
+## 12. SOLUÇÃO DE PROBLEMAS COMUNS
+
+### Segredos Não Funcionando
+
+- Verifique se os nomes dos segredos estão corretos (case sensitive)
+- Confirme se os segredos estão definidos no nível correto (repo, org, env)
+- Certifique-se de que seu workflow tem acesso aos segredos (especialmente em pull requests de forks)
+
+### Ambiente e Path
+
+- Use `working-directory: ./pasta` para executar comandos em diretórios específicos
+- Use `echo $PATH` para depurar problemas de path
+- Para adicionar ao PATH: `echo "$(npm bin)" >> $GITHUB_PATH`
+
+### Problemas em Ações Programadas
+
+- Lembre-se que `cron` usa UTC, não seu fuso horário local
+- Os jobs programados podem atrasar em momentos de alta demanda no GitHub
+- GitHub não garante execução exata no tempo programado (pode haver variação)
+
+### Logs e Depuração
+
+- Habilite debugging do Actions: `ACTIONS_RUNNER_DEBUG=true`
+- Use `set -x` em scripts bash para mostrar comandos sendo executados
+- Adicione logs detalhados em pontos críticos do código
+
+## 13. CONCLUSÃO
+
+O GitHub Actions é uma ferramenta poderosa para automação e oferece grande flexibilidade. As técnicas apresentadas neste guia permitem criar automações robustas, como a implementada no Supabase Question Auditor, que utiliza:
+
+- Múltiplas chaves de API para balanceamento de carga
+- Execução programada e manual
+- Processamento paralelo de tarefas
+- Armazenamento de resultados como artefatos
+- Tratamento sofisticado de erros com retries
+- Geração de logs detalhados
+
+Ao seguir estas práticas, você pode criar automações confiáveis e eficientes para suas próprias necessidades.
