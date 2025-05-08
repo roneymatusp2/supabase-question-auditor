@@ -7,6 +7,8 @@ import fs from 'node:fs'; // Utilizando node:fs para deixar explícito o módulo
 const SUPABASE_URL = process.env.SUPABASE_URL as string;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY as string;
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY as string;
+const BATCH_SIZE = Number(process.env.BATCH_SIZE || '10'); // Processa 10 questões por vez por padrão
+const MAX_CONCURRENCY = Number(process.env.MAX_CONCURRENCY || '5'); // Máximo de chamadas concorrentes à API
 
 const AI_MODEL = 'deepseek-reasoner';
 const LOG_FILE = 'curation-audit.log';
@@ -29,6 +31,34 @@ const L = (message: string) => {
     const timestampedMessage = `${new Date().toISOString()} • ${message}`;
     console.log(timestampedMessage); // Log no console
     auditLogStream.write(timestampedMessage + '\n'); // Log em arquivo
+};
+
+/* ─── Estatísticas e Métricas ─────────────────────────────────────────────── */
+const stats = {
+    total: 0,
+    processed: 0,
+    success: 0,
+    failed: 0,
+    skipped: 0,
+    apiErrors: 0,
+    updateErrors: 0,
+    startTime: Date.now(),
+    
+    printSummary() {
+        const duration = (Date.now() - this.startTime) / 1000; // em segundos
+        const questionsPerSecond = this.processed / duration;
+        
+        L(`📊 RESUMO DA EXECUÇÃO:`);
+        L(`   Total de questões: ${this.total}`);
+        L(`   Processadas: ${this.processed} (${(this.processed/this.total*100).toFixed(1)}%)`);
+        L(`   Sucesso: ${this.success}`);
+        L(`   Falhas: ${this.failed}`);
+        L(`   Puladas: ${this.skipped}`);
+        L(`   Erros de API: ${this.apiErrors}`);
+        L(`   Erros de atualização: ${this.updateErrors}`);
+        L(`   Tempo total: ${duration.toFixed(1)} segundos`);
+        L(`   Velocidade: ${questionsPerSecond.toFixed(2)} questões/segundo`);
+    }
 };
 
 /* ─── Prompt da IA para Curadoria ────────────────────────────────────────── */
@@ -116,6 +146,13 @@ interface AICurationResponse {
     remarks?: string;
 }
 
+interface ProcessResult {
+    question: QuestionRecord;
+    success: boolean;
+    response?: AICurationResponse | null;
+    error?: string;
+}
+
 /* ─── Funções Utilitárias ────────────────────────────────────────────────── */
 
 // Função para sanitizar strings antes de enviar para a API
@@ -149,6 +186,34 @@ function sanitizeObject(obj: any): any {
     return obj;
 }
 
+// Função para processar questões em paralelo com limite de concorrência
+async function processBatch<T, R>(items: T[], processItem: (item: T) => Promise<R>, maxConcurrent = 5): Promise<R[]> {
+    const results: R[] = [];
+    const executing: Promise<void>[] = [];
+    
+    for (const item of items) {
+        const p = processItem(item).then(result => {
+            results.push(result);
+            executing.splice(executing.indexOf(p), 1);
+        });
+        
+        executing.push(p);
+        if (executing.length >= maxConcurrent) {
+            await Promise.race(executing);
+        }
+    }
+    
+    await Promise.all(executing);
+    return results;
+}
+
+// Divisão de array em blocos de tamanho específico
+function chunkArray<T>(array: T[], size: number): T[][] {
+    return Array(Math.ceil(array.length / size))
+        .fill(0)
+        .map((_, index) => array.slice(index * size, (index + 1) * size));
+}
+
 /* ─── Funções de Banco de Dados ──────────────────────────────────────────── */
 async function fetchQuestionsForTopic(topic: string): Promise<QuestionRecord[]> {
     L(`🔍 Buscando questões para o tópico: ${topic}`);
@@ -166,6 +231,7 @@ async function fetchQuestionsForTopic(topic: string): Promise<QuestionRecord[]> 
         return [];
     }
     L(`✔️ ${data.length} questões encontradas.`);
+    stats.total = data.length;
     return data as QuestionRecord[];
 }
 
@@ -178,16 +244,37 @@ async function updateQuestionInSupabase(questionId: string, updates: Partial<Que
 
     if (error) {
         L(`❌ Erro ao atualizar questão ID ${questionId}: ${error.message}`);
+        stats.updateErrors++;
         return false;
     }
     L(`✔️ Questão ID ${questionId} atualizada com sucesso.`);
     return true;
 }
 
+// Função para atualizar multiplas questões em batch
+async function updateQuestionsInBatch(updates: {id: string, updates: Partial<QuestionRecord>}[]): Promise<number> {
+    if (updates.length === 0) return 0;
+    
+    let successCount = 0;
+    // Agrupar por 10 atualizações por vez
+    const batches = chunkArray(updates, 10);
+    
+    for (const batch of batches) {
+        try {
+            await Promise.all(batch.map(async ({id, updates}) => {
+                const success = await updateQuestionInSupabase(id, updates);
+                if (success) successCount++;
+            }));
+        } catch (error: any) {
+            L(`❌ Erro ao atualizar lote de questões: ${error?.message || 'Erro desconhecido'}`);
+        }
+    }
+    
+    return successCount;
+}
+
 /* ─── Interação com a IA ────────────────────────────────────────────────── */
 async function getCurationFromAI(question: QuestionRecord): Promise<AICurationResponse | null> {
-    L(`🤖 Solicitando curadoria para a questão ID ${question.id}...`);
-    
     try {
         // Cria um payload sanitizado para evitar problemas de JSON
         const sanitizedPayload = {
@@ -231,7 +318,6 @@ async function getCurationFromAI(question: QuestionRecord): Promise<AICurationRe
             
             const rawResponse = chatCompletion.choices[0]?.message.content;
             if (!rawResponse) {
-                L(`❌ Resposta da IA vazia para a questão ID ${question.id}.`);
                 return null;
             }
             
@@ -239,7 +325,6 @@ async function getCurationFromAI(question: QuestionRecord): Promise<AICurationRe
             if (jsonMatch && jsonMatch[0]) {
                 return JSON.parse(jsonMatch[0]) as AICurationResponse;
             } else {
-                L(`❌ Resposta inválida recebida: ${rawResponse}`);
                 return null;
             }
         }
@@ -256,7 +341,6 @@ async function getCurationFromAI(question: QuestionRecord): Promise<AICurationRe
 
         const rawResponse = chatCompletion.choices[0]?.message.content;
         if (!rawResponse) {
-            L(`❌ Resposta da IA vazia para a questão ID ${question.id}.`);
             return null;
         }
 
@@ -264,15 +348,13 @@ async function getCurationFromAI(question: QuestionRecord): Promise<AICurationRe
         if (jsonMatch && jsonMatch[0]) {
             return JSON.parse(jsonMatch[0]) as AICurationResponse;
         } else {
-            L(`❌ Resposta inválida recebida: ${rawResponse}`);
             return null;
         }
     } catch (error: any) {
-        L(`❌ Erro na API DeepSeek: ${error?.message || 'Erro desconhecido'}`);
+        stats.apiErrors++;
         
         // Adiciona retry com um delay para lidar com erros temporários
         if (error?.message?.includes('Bad escaped character in JSON')) {
-            L(`⏳ Tentando novamente com método alternativo para a questão ID ${question.id}...`);
             try {
                 // Abordagem alternativa sem uso de JSON.stringify
                 const simplePayload = {
@@ -283,8 +365,8 @@ async function getCurationFromAI(question: QuestionRecord): Promise<AICurationRe
                     Solução/dica: ${question.solution_md || ''}`
                 };
                 
-                // Espera 2 segundos antes de tentar novamente
-                await new Promise(resolve => setTimeout(resolve, 2000));
+                // Espera 1 segundo antes de tentar novamente (reduzido para melhorar performance)
+                await new Promise(resolve => setTimeout(resolve, 1000));
                 
                 const chatCompletion = await deepSeekAI.chat.completions.create({
                     model: AI_MODEL,
@@ -297,24 +379,47 @@ async function getCurationFromAI(question: QuestionRecord): Promise<AICurationRe
                 
                 const rawResponse = chatCompletion.choices[0]?.message.content;
                 if (!rawResponse) {
-                    L(`❌ Retry: Resposta da IA vazia para a questão ID ${question.id}.`);
                     return null;
                 }
                 
                 const jsonMatch = rawResponse.match(/\{[\s\S]*\}/);
                 if (jsonMatch && jsonMatch[0]) {
                     return JSON.parse(jsonMatch[0]) as AICurationResponse;
-                } else {
-                    L(`❌ Retry: Resposta inválida recebida: ${rawResponse}`);
-                    return null;
                 }
             } catch (retryError: any) {
-                L(`❌ Retry falhou para a questão ID ${question.id}: ${retryError?.message || 'Erro desconhecido'}`);
                 return null;
             }
         }
         
         return null;
+    }
+}
+
+/* ─── Função para processar uma questão completa ────────────────────────── */
+async function processQuestion(question: QuestionRecord): Promise<ProcessResult> {
+    L(`🤖 Solicitando curadoria para a questão ID ${question.id}...`);
+    stats.processed++;
+    
+    try {
+        const curationResponse = await getCurationFromAI(question);
+        if (!curationResponse) {
+            stats.failed++;
+            return { question, success: false, error: 'Resposta da IA vazia ou inválida' };
+        }
+
+        stats.success++;
+        return { 
+            question, 
+            success: true, 
+            response: curationResponse
+        };
+    } catch (error: any) {
+        stats.failed++;
+        return { 
+            question, 
+            success: false, 
+            error: error?.message || 'Erro desconhecido' 
+        };
     }
 }
 
@@ -324,28 +429,65 @@ async function main() {
     const topicToCurate = process.argv.find(arg => arg.startsWith('--topic='))?.split('=')[1] ?? 'monomios';
 
     try {
+        // 1. Buscar todas as questões
         const questions = await fetchQuestionsForTopic(topicToCurate);
         if (questions.length === 0) {
             L('🏁 Nenhuma questão a processar.');
             return;
         }
 
-        for (const question of questions) {
-            const curationResponse = await getCurationFromAI(question);
-            if (!curationResponse) continue;
+        // 2. Dividir em lotes para processamento
+        const batches = chunkArray(questions, BATCH_SIZE);
+        L(`📦 Dividindo ${questions.length} questões em ${batches.length} lotes de até ${BATCH_SIZE}`);
 
-            const updates: Partial<QuestionRecord> = {};
-            if (curationResponse.corrected_topic) updates.topic = curationResponse.corrected_topic;
-            if (curationResponse.statement_latex) updates.statement_md = curationResponse.statement_latex;
-            if (curationResponse.options_latex) updates.options = curationResponse.options_latex;
-            if (curationResponse.correct_option_index !== undefined) updates.correct_option = curationResponse.correct_option_index;
-            if (curationResponse.hint) updates.solution_md = curationResponse.hint;
-
-            await updateQuestionInSupabase(question.id, updates);
+        // 3. Processar cada lote
+        let updateQueue: {id: string, updates: Partial<QuestionRecord>}[] = [];
+        let batchIndex = 0;
+        
+        for (const batch of batches) {
+            batchIndex++;
+            L(`🔄 Processando lote ${batchIndex}/${batches.length} (${batch.length} questões)...`);
+            
+            // Processa questões em paralelo com limite de concorrência
+            const results = await processBatch(batch, processQuestion, MAX_CONCURRENCY);
+            
+            // Prepara as atualizações necessárias
+            for (const result of results) {
+                if (result.success && result.response) {
+                    const updates: Partial<QuestionRecord> = {};
+                    const r = result.response;
+                    
+                    if (r.corrected_topic) updates.topic = r.corrected_topic;
+                    if (r.statement_latex) updates.statement_md = r.statement_latex;
+                    if (r.options_latex) updates.options = r.options_latex;
+                    if (r.correct_option_index !== undefined) updates.correct_option = r.correct_option_index;
+                    if (r.hint) updates.solution_md = r.hint;
+                    
+                    // Adiciona à fila de atualizações se houver algo para atualizar
+                    if (Object.keys(updates).length > 0) {
+                        updateQueue.push({ id: result.question.id, updates });
+                    } else {
+                        stats.skipped++;
+                    }
+                }
+            }
+            
+            // Aplica as atualizações em lote a cada 50 questões ou no final de um lote
+            if (updateQueue.length >= 50 || batchIndex === batches.length) {
+                L(`💾 Aplicando ${updateQueue.length} atualizações no Supabase...`);
+                await updateQuestionsInBatch(updateQueue);
+                updateQueue = [];
+            }
+            
+            // Imprime estatísticas parciais a cada lote
+            L(`📊 Progresso: ${stats.processed}/${stats.total} questões (${(stats.processed/stats.total*100).toFixed(1)}%)`);
         }
+        
     } catch (error: any) {
         L(`❌ Erro fatal: ${error?.message || 'Erro desconhecido'}`);
     } finally {
+        // Imprime estatísticas completas
+        stats.printSummary();
         L('🏁 Curadoria concluída.');
         auditLogStream.end();
     }
