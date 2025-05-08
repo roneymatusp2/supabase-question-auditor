@@ -50,9 +50,8 @@ jobs:
       - name: Setup Supabase CLI
         run: |
           echo "Installing Supabase CLI..."
-          curl -sL https://github.com/supabase/cli/releases/download/v1.158.4/supabase_1.158.4_linux_amd64.deb -o sb.deb
-          sudo dpkg -i sb.deb
-          rm sb.deb
+          # Use a more reliable installation method directly from NPM
+          npm install -g supabase
           echo "Logging in to Supabase CLI..."
           echo "${{ secrets.SUPABASE_ACCESS_TOKEN }}" | supabase login
 
