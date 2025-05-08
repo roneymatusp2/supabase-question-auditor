@@ -702,7 +702,8 @@ async function getCurationFromAI(question: QuestionRecord, prompt: string): Prom
             
             // Testa que o JSON é válido
             JSON.stringify(payload);
-        } catch (jsonError) {
+        } catch (error) {
+            const jsonError = error as Error;
             // Cria um payload ultra simplificado em caso de erro
             L(`⚠️ Erro ao criar JSON para a questão ID ${question.id}, usando payload ultra simples`);
             attempts.errors.push(`JSON Error: ${jsonError.message}`);
@@ -764,7 +765,8 @@ async function getCurationFromAI(question: QuestionRecord, prompt: string): Prom
                 jsonResponse = JSON.parse(rawResponse) as AICurationResponse;
                 return jsonResponse;
             } catch (error) {
-                attempts.errors.push(`JSON Parse Error L1: ${error.message}`);
+                const parseError = error as Error;
+                attempts.errors.push(`JSON Parse Error L1: ${parseError.message}`);
                 
                 // Nível 2: Busca por padrão de objeto JSON na resposta
                 const jsonMatch = rawResponse.match(/\{[\s\S]*\}/);
@@ -772,7 +774,8 @@ async function getCurationFromAI(question: QuestionRecord, prompt: string): Prom
                     try {
                         jsonResponse = JSON.parse(jsonMatch[0]) as AICurationResponse;
                         return jsonResponse;
-                    } catch (nestedError) {
+                    } catch (error) {
+                        const nestedError = error as Error;
                         attempts.errors.push(`JSON Parse Error L2: ${nestedError.message}`);
                         
                         // Nível 3: Extração agressiva de JSON, removendo caracteres problemáticos
@@ -788,7 +791,8 @@ async function getCurationFromAI(question: QuestionRecord, prompt: string): Prom
                                 
                             jsonResponse = JSON.parse(`{${cleanedJson.substring(1, cleanedJson.length-1)}}`) as AICurationResponse;
                             return jsonResponse;
-                        } catch (finalError) {
+                        } catch (error) {
+                            const finalError = error as Error;
                             attempts.errors.push(`JSON Parse Error L3: ${finalError.message}`);
                         }
                     }
@@ -851,7 +855,7 @@ async function getCurationFromAI(question: QuestionRecord, prompt: string): Prom
             }
             
             // Verifica se a questão foi identificada como não sendo do tópico correto
-            const topicChecks = {
+            const topicChecks: Record<string, boolean> = {
                 'monomios': aiResponse.isMonomio === false,
                 'polinomios': aiResponse.isPolinomio === false,
                 'funcoes': aiResponse.isFuncao === false,
@@ -859,9 +863,15 @@ async function getCurationFromAI(question: QuestionRecord, prompt: string): Prom
             };
             
             // Obtém o campo de verificação para o tópico atual
-            const currentTopic = Object.keys(SYSTEM_PROMPTS).find(key => SYSTEM_PROMPTS[key] === prompt) || 'monomios';
+            let currentTopic = 'monomios';
+            for (const key in SYSTEM_PROMPTS) {
+                if (SYSTEM_PROMPTS[key as keyof typeof SYSTEM_PROMPTS] === prompt) {
+                    currentTopic = key;
+                    break;
+                }
+            }
             
-            if (topicChecks[currentTopic]) {
+            if (topicChecks[currentTopic as keyof typeof topicChecks]) {
                 stats.nonMonomioCount++; // Mantemos o nome da variável para compatibilidade
                 L(`🔍 Questão ID ${question.id} identificada como não sendo de ${currentTopic}. Tópico sugerido: ${aiResponse.corrected_topic || 'não especificado'}`);
             }
@@ -925,13 +935,16 @@ async function main() {
     const topicToCurate = process.argv.find(arg => arg.startsWith('--topic='))?.split('=')[1] ?? 'monomios';
     
     // Verifica se o tópico é suportado
-    if (!Object.keys(SYSTEM_PROMPTS).includes(topicToCurate)) {
+    // Verifica se o tópico é uma chave válida do objeto SYSTEM_PROMPTS
+    if (!(topicToCurate in SYSTEM_PROMPTS)) {
         L(`⚠️ Tópico "${topicToCurate}" não encontrado nos prompts disponíveis. Tópicos suportados: ${Object.keys(SYSTEM_PROMPTS).join(', ')}`);
         L(`⚠️ Usando prompt para "monomios" como fallback.`);
     }
     
-    // Seleciona o prompt adequado para o tópico
-    const selectedPrompt = SYSTEM_PROMPTS[topicToCurate] || SYSTEM_PROMPTS['monomios'];
+    // Seleciona o prompt adequado para o tópico, com typecasting seguro
+    const selectedPrompt = (topicToCurate in SYSTEM_PROMPTS) 
+        ? SYSTEM_PROMPTS[topicToCurate as keyof typeof SYSTEM_PROMPTS] 
+        : SYSTEM_PROMPTS['monomios'];
     L(`📚 Usando prompt específico para o tópico: ${topicToCurate}`);
     
     const maxQuestions = Number(process.argv.find(arg => arg.startsWith('--max='))?.split('=')[1] || '0');
