@@ -1,11 +1,9 @@
 /**
  * audit-questions.ts
  * 
- * Main entry point for question auditing - calls the validateQuestions implementation
- * with appropriate topic filtering based on command line arguments.
+ * Ponto de entrada para a auditoria de questões usando o DeepSeek AI.
+ * Este script executa o validateQuestions.ts que contém a implementação completa
+ * usando o prompt especificado para validação de monômios.
  */
 
 import './validateQuestions.js';
-
-// This file is just a wrapper for validateQuestions.ts for backwards compatibility
-// The actual implementation is in validateQuestions.ts

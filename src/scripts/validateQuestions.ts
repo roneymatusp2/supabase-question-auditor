@@ -1,196 +1,226 @@
-/**
- * Script: validateQuestions.ts
- *
- * Function: 
- * 1. Read questions from the "questions" table in Supabase (e.g., topic = "monomio").
- * 2. For each question, call the DeepSeek API (via OpenAI) to suggest corrections.
- * 3. Update the question in Supabase.
- * 4. Log corrections to the curation-audit.log file.
- */
-
 import 'dotenv/config';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { OpenAI } from 'openai';
-import fs from 'node:fs';
-import path from 'node:path';
+import fs from 'node:fs'; // Utilizando node:fs para deixar explícito o módulo nativo do Node.js
 
-/* ──────────────────────────────────────────────────────────────────────────────
-   1) ENVIRONMENT VARIABLES AND CONFIGURATIONS 
-   ────────────────────────────────────────────────────────────────────────────── */
+/* ─── Configuração e Variáveis de Ambiente ────────────────────────────────── */
 const SUPABASE_URL = process.env.SUPABASE_URL as string;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY as string;
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY as string;
-const AI_MODEL = 'deepseek-reasoner'; // or another model name on DeepSeek
 
-const LOG_FILE = 'curation-audit.log'; // log file name
+const AI_MODEL = 'deepseek-reasoner';
+const LOG_FILE = 'curation-audit.log';
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY || !DEEPSEEK_API_KEY) {
-  console.error('❌ Required environment variables missing (SUPABASE_URL, SUPABASE_SERVICE_KEY, DEEPSEEK_API_KEY)');
-  process.exit(1);
-}
-
-/* ──────────────────────────────────────────────────────────────────────────────
-   2) INITIALIZATION OF CLIENTS (SUPABASE AND "OPENAI" for DEEPSEEK)
-   ────────────────────────────────────────────────────────────────────────────── */
-const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
-
-// OpenAI is used to hit the "DeepSeek" route when we define baseURL to https://api.deepseek.com/v1
-// and pass `apiKey: DEEPSEEK_API_KEY`.
-const deepSeekAI = new OpenAI({
-  apiKey: DEEPSEEK_API_KEY,
-  // If you need to override the OpenAI base URL, do so:
-  baseURL: 'https://api.deepseek.com/v1',
-});
-
-/* ──────────────────────────────────────────────────────────────────────────────
-   3) MAIN FUNCTION: Fetch, Validate/Fix and Update
-   ────────────────────────────────────────────────────────────────────────────── */
-async function main() {
-  console.log('==== Starting Question Validation (monomios) ====');
-  
-  // (Optional) Delete old LOG
-  // fs.unlinkSync(LOG_FILE); // if you always want to overwrite
-  
-  // 3.1) Fetch questions from Supabase with "topic = monomio" (example)
-  //     Adjust according to your table and columns (assuming the table is called "questions")
-  const { data: questions, error } = await supabase
-    .from('questions')
-    .select('*')
-    .eq('topic', 'monomio')
-    .limit(20); // Example: get only 20
-  if (error) {
-    log(`Error fetching questions from Supabase: ${error.message}`);
+    console.error('❌ Variáveis de ambiente obrigatórias ausentes (SUPABASE_URL, SUPABASE_SERVICE_KEY, DEEPSEEK_API_KEY).');
     process.exit(1);
-  }
-
-  if (!questions || questions.length === 0) {
-    log('No monomio questions found. Ending.');
-    return;
-  }
-
-  log(`Found ${questions.length} question(s) with topic="monomio". Starting analysis...`);
-
-  // 3.2) For each question, call the DeepSeek API to fix it
-  for (const question of questions) {
-    try {
-      // Build prompt or "messages" for deepseek
-      const userPrompt = buildPrompt(question);
-
-      // Make the call
-      const response = await deepSeekAI.chat.completions.create({
-        model: AI_MODEL, // "deepseek-reasoner" or another
-        messages: [
-          {
-            role: 'system',
-            content: `You are a system that adjusts and validates algebra questions about monomials. Return in JSON format.`
-          },
-          {
-            role: 'user',
-            content: userPrompt,
-          },
-        ],
-        temperature: 0.5,
-        max_tokens: 500,
-      });
-
-      const content = response.choices?.[0]?.message?.content || '';
-      if (!content) {
-        log(`[ID: ${question.id}] Empty response from DeepSeek. Skipping...`);
-        continue;
-      }
-
-      // Try to parse the JSON that DeepSeek returns
-      const { correctedStatement, correctedSolution } = parseDeepSeekJSON(content);
-
-      // 3.3) Update in Supabase if there was actually a correction
-      if (correctedStatement !== question.statement_md || correctedSolution !== question.solution_md) {
-        // Example: set `statement_md` and `solution_md` with the corrections
-        const { error: updateError } = await supabase
-          .from('questions')
-          .update({
-            statement_md: correctedStatement,
-            solution_md: correctedSolution,
-            updated_at: new Date().toISOString(), // if you have this column
-          })
-          .eq('id', question.id);
-
-        if (updateError) {
-          log(`[ID: ${question.id}] ERROR updating Supabase: ${updateError.message}`);
-        } else {
-          log(`[ID: ${question.id}] OK - Correction applied!`);
-        }
-      } else {
-        // No correction
-        log(`[ID: ${question.id}] No changes needed.`);
-      }
-
-    } catch (err: any) {
-      log(`[ID: ${question.id}] Failed to process: ${err.message}`);
-    }
-  }
-
-  log('==== End of validation! ====');
 }
 
-/* ──────────────────────────────────────────────────────────────────────────────
-   4) HELPER FUNCTIONS
-   ────────────────────────────────────────────────────────────────────────────── */
-
-// Builds a prompt with the current question, asking DeepSeek to review and fix it
-function buildPrompt(q: any): string {
-  return `
-We have a monomial question, with statement:
-"${q.statement_md}"
-
-Solution:
-"${q.solution_md || '[no solution]'}"
-
-Please check if there are errors in the formulation (both statement and solution).
-If there are problems, fix them. 
-Return JSON with keys:
-{
-  "correctedStatement": "...",
-  "correctedSolution": "..."
-}
-`;
-}
-
-// Parses the JSON returned by the model
-// The DeepSeek API (via OpenAI) may come with extra text, so we use regex or a try-catch
-function parseDeepSeekJSON(content: string): { correctedStatement: string; correctedSolution: string } {
-  // Try direct parsing
-  try {
-    const parsed = JSON.parse(content);
-    return {
-      correctedStatement: parsed.correctedStatement || '',
-      correctedSolution: parsed.correctedSolution || '',
-    };
-  } catch {
-    // If it fails, try to extract via regex
-    const match = content.match(/({[\s\S]*})/);
-    if (match) {
-      const obj = JSON.parse(match[0]);
-      return {
-        correctedStatement: obj.correctedStatement || '',
-        correctedSolution: obj.correctedSolution || '',
-      };
-    }
-    // If it still fails, return original
-    return { correctedStatement: '', correctedSolution: '' };
-  }
-}
-
-// Function to log to file and also print to console
-function log(msg: string) {
-  console.log(msg);
-  const line = `[${new Date().toISOString()}] ${msg}\n`;
-  fs.appendFileSync(path.join(process.cwd(), LOG_FILE), line);
-}
-
-/* ──────────────────────────────────────────────────────────────────────────────
-   5) EXECUTION
-   ────────────────────────────────────────────────────────────────────────────── */
-main().catch((err) => {
-  console.error('Fatal error:', err);
-  process.exit(1);
+/* ─── Inicialização dos Clientes ─────────────────────────────────────────── */
+const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+const deepSeekAI = new OpenAI({
+    apiKey: DEEPSEEK_API_KEY,
+    baseURL: 'https://api.deepseek.com/v1'
 });
+
+/* ─── Utilitário de Log ──────────────────────────────────────────────────── */
+const auditLogStream = fs.createWriteStream(LOG_FILE, { flags: 'a' });
+const L = (message: string) => {
+    const timestampedMessage = `${new Date().toISOString()} • ${message}`;
+    console.log(timestampedMessage); // Log no console
+    auditLogStream.write(timestampedMessage + '\n'); // Log em arquivo
+};
+
+/* ─── Prompt da IA para Curadoria ────────────────────────────────────────── */
+const SYSTEM_PROMPT_MONOMIOS = `
+Você está atuando como um agente de curadoria matemática responsável por revisar e corrigir questões classificadas como "monômios".
+
+Sua função é:
+1. Verificar se a questão está corretamente classificada como "monômio" — e ser EXTREMAMENTE RIGOROSO nisso.
+2. Corrigir a questão se necessário (enunciado, alternativas, índice correto).
+3. Corrigir ou gerar o campo LaTeX do enunciado e das alternativas.
+4. Corrigir ou gerar uma dica pedagógica (hint) se estiver ausente.
+5. Garantir que tudo esteja consistente e autocontido.
+6. Retornar os campos corrigidos em formato estruturado (ver abaixo).
+
+---
+
+CRITÉRIOS RIGOROSOS PARA ACEITAR COMO "QUESTÃO DE MONÔMIOS":
+
+✔️ É monômio apenas se:
+• A expressão matemática for um único termo algébrico, como:
+  - 5x, -3a², 7xy²/2, -3/4mn³
+• OU a operação envolver SOMENTE monômios semelhantes, como:
+  - 3x + 2x
+  - 7a²b - 4a²b
+
+A operação pode ser:
+• multiplicação entre monômios
+• divisão entre monômios
+• soma ou subtração entre monômios semelhantes
+• identificação de grau, coeficiente ou parte literal
+
+❌ NÃO É MONÔMIO SE:
+• Envolve termos diferentes (ex: 3x + 2y, x² + x)
+• Envolve equações (ex: 3x = 6)
+• Envolve avaliação numérica de expressões com mais de um termo (ex: 4a - 2)
+• É binômio ou polinômio
+
+---
+
+EXEMPLOS VÁLIDOS:
+- "Multiplique os monômios 3a² e -2a³."
+- "Qual o grau do monômio -5x⁴y²?"
+- "Calcule 6x³ ÷ 2x."
+- "Some -3ab² com 5ab²."
+
+EXEMPLOS INVÁLIDOS:
+- "Qual o valor de 4a - 2 para a = 3?" → binômio
+- "Resolva 3x = 9." → equação
+- "Simplifique 2x² + 3x - x²." → polinômio
+
+---
+
+RESPOSTA ESTRUTURADA (JSON):
+
+{
+  "isMonomio": true | false,
+  "corrected_topic": "monomios" | "binomios" | "avaliacao_alg" | ...,
+  "statement_latex": "...",
+  "options_latex": ["...", "...", "...", "..."],
+  "correct_option_index": 0-3,
+  "hint": "...",
+  "remarks": "Correção aplicada com base nos critérios acima."
+}
+
+⚠️ Não justifique. Apenas corrija. Corrija português, LaTeX e lógica se necessário.
+`;
+
+/* ─── Interfaces para Tipagem ────────────────────────────────────────────── */
+interface QuestionRecord {
+    id: string;
+    statement_md: string;
+    options: string[];
+    correct_option: number;
+    solution_md?: string;
+    topic: string;
+}
+
+interface AICurationResponse {
+    isMonomio: boolean;
+    corrected_topic?: string;
+    statement_latex?: string;
+    options_latex?: string[];
+    correct_option_index?: number;
+    hint?: string;
+    remarks?: string;
+}
+
+/* ─── Funções de Banco de Dados ──────────────────────────────────────────── */
+async function fetchQuestionsForTopic(topic: string): Promise<QuestionRecord[]> {
+    L(`🔍 Buscando questões para o tópico: ${topic}`);
+    const { data, error } = await supabase
+        .from('questions')
+        .select('*')
+        .eq('topic', topic);
+
+    if (error) {
+        L(`❌ Erro ao buscar questões: ${error.message}`);
+        throw error;
+    }
+    if (!data || data.length === 0) {
+        L(`⚠️ Nenhuma questão encontrada para o tópico: ${topic}.`);
+        return [];
+    }
+    L(`✔️ ${data.length} questões encontradas.`);
+    return data as QuestionRecord[];
+}
+
+async function updateQuestionInSupabase(questionId: string, updates: Partial<QuestionRecord>): Promise<boolean> {
+    L(`🔄 Atualizando questão ID ${questionId}...`);
+    const { error } = await supabase
+        .from('questions')
+        .update(updates)
+        .eq('id', questionId);
+
+    if (error) {
+        L(`❌ Erro ao atualizar questão ID ${questionId}: ${error.message}`);
+        return false;
+    }
+    L(`✔️ Questão ID ${questionId} atualizada com sucesso.`);
+    return true;
+}
+
+/* ─── Interação com a IA ────────────────────────────────────────────────── */
+async function getCurationFromAI(question: QuestionRecord): Promise<AICurationResponse | null> {
+    L(`🤖 Solicitando curadoria para a questão ID ${question.id}...`);
+    const payload = {
+        statement: question.statement_md,
+        options: question.options,
+        correct_option: question.correct_option,
+        solution: question.solution_md
+    };
+
+    try {
+        const chatCompletion = await deepSeekAI.chat.completions.create({
+            model: AI_MODEL,
+            temperature: 0,
+            messages: [
+                { role: 'system', content: SYSTEM_PROMPT_MONOMIOS },
+                { role: 'user', content: JSON.stringify(payload) }
+            ]
+        });
+
+        const rawResponse = chatCompletion.choices[0]?.message.content;
+        if (!rawResponse) {
+            L(`❌ Resposta da IA vazia para a questão ID ${question.id}.`);
+            return null;
+        }
+
+        const jsonMatch = rawResponse.match(/\{[\s\S]*\}/);
+        if (jsonMatch && jsonMatch[0]) {
+            return JSON.parse(jsonMatch[0]) as AICurationResponse;
+        } else {
+            L(`❌ Resposta inválida recebida: ${rawResponse}`);
+            return null;
+        }
+    } catch (error: any) {
+        L(`❌ Erro na API DeepSeek: ${error?.message || 'Erro desconhecido'}`);
+        return null;
+    }
+}
+
+/* ─── Execução Principal ────────────────────────────────────────────────── */
+async function main() {
+    L('🚀 Iniciando curadoria de questões...');
+    const topicToCurate = process.argv.find(arg => arg.startsWith('--topic='))?.split('=')[1] ?? 'monomios';
+
+    try {
+        const questions = await fetchQuestionsForTopic(topicToCurate);
+        if (questions.length === 0) {
+            L('🏁 Nenhuma questão a processar.');
+            return;
+        }
+
+        for (const question of questions) {
+            const curationResponse = await getCurationFromAI(question);
+            if (!curationResponse) continue;
+
+            const updates: Partial<QuestionRecord> = {};
+            if (curationResponse.corrected_topic) updates.topic = curationResponse.corrected_topic;
+            if (curationResponse.statement_latex) updates.statement_md = curationResponse.statement_latex;
+            if (curationResponse.options_latex) updates.options = curationResponse.options_latex;
+            if (curationResponse.correct_option_index !== undefined) updates.correct_option = curationResponse.correct_option_index;
+            if (curationResponse.hint) updates.solution_md = curationResponse.hint;
+
+            await updateQuestionInSupabase(question.id, updates);
+        }
+    } catch (error: any) {
+        L(`❌ Erro fatal: ${error?.message || 'Erro desconhecido'}`);
+    } finally {
+        L('🏁 Curadoria concluída.');
+        auditLogStream.end();
+    }
+}
+
+main();
