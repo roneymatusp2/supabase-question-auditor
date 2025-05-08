@@ -4,8 +4,8 @@ on:
   push:
     branches: [main]
     paths:
-      - '.github/workflows/validate-supabase-questions.yml'
-      - 'src/audit.ts'
+      - '.github/workflows/validate-questions.yml'
+      - 'src/scripts/audit-questions.ts'
       - 'tsconfig.json'
       - 'package.json'
       - 'package-lock.json'
@@ -21,9 +21,11 @@ jobs:
     timeout-minutes: 20
 
     env:
-      SUPABASE_SERVICE_KEY:  ${{ secrets.SUPABASE_SERVICE_KEY }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-      DEEPSEEK_API_KEY:      ${{ secrets.DEEPSEEK_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      NODE_ENV: production
 
     steps:
       - name: Checkout repository
@@ -38,28 +40,30 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci --prefer-online --no-audit
+        run: |
+          echo "🔄 Sincronizando dependências..."
+          rm -rf node_modules
+          npm install
 
       - name: Build TypeScript
         run: npm run build
-        env:
-          NODE_ENV: production
 
       - name: Setup Supabase CLI
         run: |
           echo "🔧 Instalando Supabase CLI..."
           curl -sL https://github.com/supabase/cli/releases/download/v1.158.4/supabase_1.158.4_linux_amd64.deb -o sb.deb
           sudo dpkg -i sb.deb
+          rm sb.deb
           echo "🔑 Efetuando login no Supabase CLI..."
-          supabase login --access-token "$SUPABASE_ACCESS_TOKEN"
+          echo "${{ secrets.SUPABASE_ACCESS_TOKEN }}" | supabase login
 
       - name: Run audit script
-        run: npm run audit
+        run: npm run audit:questions
 
       - name: Upload audit log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: audit-log
-          path: audit.log
+          path: curation-audit.log
           retention-days: 30
