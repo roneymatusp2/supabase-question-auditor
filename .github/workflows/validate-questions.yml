@@ -5,7 +5,8 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/validate-questions.yml'
-      - 'src/**/*'
+      - 'src/**/*.ts'
+      - '*.ts'
       - 'tsconfig.json'
       - 'package.json'
       - 'package-lock.json'
@@ -18,12 +19,11 @@ on:
 jobs:
   validate_questions:
     runs-on: ubuntu-latest
-    timeout-minutes: 60  # Aumentado de 20 para 60 minutos
+    timeout-minutes: 60
 
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DEEPSEEK_API_KEY_2: ${{ secrets.DEEPSEEK_API_KEY_2 }}
       DEEPSEEK_API_KEY_3: ${{ secrets.DEEPSEEK_API_KEY_3 }}
@@ -51,17 +51,6 @@ jobs:
       - name: Build TypeScript
         run: npm run build
 
-      - name: Setup Supabase CLI
-        run: |
-          echo "Installing Supabase CLI..."
-          # Install as a project dependency as recommended by Supabase
-          npm install supabase --save-dev
-          # Add npx to path to ensure we can run supabase commands
-          echo "$(npm bin)" >> $GITHUB_PATH
-          # Login to Supabase
-          echo "Logging in to Supabase CLI..."
-          echo "${{ secrets.SUPABASE_ACCESS_TOKEN }}" | npx supabase login
-
       - name: Run audit script
         run: npm run audit:questions
 
@@ -70,5 +59,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: audit-log
-          path: curation-audit.log
+          path: curation-pipeline.log
           retention-days: 30
