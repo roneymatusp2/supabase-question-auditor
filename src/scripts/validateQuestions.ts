@@ -1,14 +1,16 @@
+// src/scripts/validateQuestions.ts
+// NOVA VERSÃO - PIPELINE DE CURADORIA
+
 import 'dotenv/config';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { OpenAI } from 'openai';
 import fs from 'node:fs';
-import path from 'node:path'; // Para caminhos absolutos
-
+// Importa os prompts e o tipo do arquivo que criamos no Passo 1
 import { SYSTEM_PROMPTS, AlgebraticamenteTopic } from '../system-prompts.js';
 
 /* ─── Configuração e Variáveis de Ambiente ────────────────────────────────── */
 const SUPABASE_URL = process.env.SUPABASE_URL as string;
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY as string; // !! USE A CHAVE SERVICE_ROLE !!
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY as string;
 
 const apiKeys = [
   process.env.DEEPSEEK_API_KEY,
@@ -18,24 +20,24 @@ const apiKeys = [
   process.env.DEEPSEEK_API_KEY_5,
 ].filter(Boolean) as string[];
 
-const BATCH_SIZE = Number(process.env.BATCH_SIZE || '10');
+const BATCH_SIZE = Number(process.env.BATCH_SIZE || '10'); // Padrão 10
 const MAX_CONCURRENCY = Math.min(
-  Number(process.env.MAX_CONCURRENCY || '5'),
-  apiKeys.length > 0 ? apiKeys.length * 3 : 1 // Garante ao menos 1 se não houver chaves (embora o script pare)
+  Number(process.env.MAX_CONCURRENCY || '5'), // Padrão 5
+  apiKeys.length * 3
 );
 
 const AI_MODEL = 'deepseek-reasoner';
-const LOG_FILE = path.resolve(process.cwd(), 'curation-pipeline.log'); // Log na raiz do projeto
+// Coloca o log na raiz do projeto, fora de src/
+const LOG_FILE = './curation-pipeline.log'; // Ajustado para raiz
 
-if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
-  console.error('❌ SUPABASE_URL e SUPABASE_SERVICE_KEY são obrigatórias.');
+if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY || apiKeys.length === 0) {
+  console.error(
+    '❌ Variáveis de ambiente obrigatórias ausentes (SUPABASE_URL, SUPABASE_SERVICE_KEY, pelo menos uma DEEPSEEK_API_KEY).'
+  );
   process.exit(1);
 }
-if (apiKeys.length === 0) {
-    console.error('❌ Pelo menos uma DEEPSEEK_API_KEY é obrigatória.');
-    process.exit(1);
-}
 
+// Sequência de processamento dos tópicos
 const TOPIC_SEQUENCE: AlgebraticamenteTopic[] = [
   'monomios',
   'binomios',
@@ -59,73 +61,48 @@ apiKeys.forEach(key => {
 /* ─── Inicialização dos Clientes ─────────────────────────────────────────── */
 const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 const deepSeekClients = apiKeys.map(
-  apiKey => new OpenAI({ apiKey, baseURL: 'https://api.deepseek.com/v1' })
+  apiKey => new OpenAI({ apiKey, baseURL: 'https://api.deepseek.com/v1' }) // Ajuste baseURL se necessário
 );
 
 function getNextDeepSeekClient(): OpenAI {
-    if (apiKeys.length === 0) throw new Error("Nenhuma chave de API DeepSeek configurada.");
-    if (deepSeekClients.length === 0) throw new Error("Pool de clientes DeepSeek não inicializado.");
-
-    if (apiKeys.length === 1) {
-        const key = apiKeys[0];
-        keyStats.calls.set(key, (keyStats.calls.get(key) || 0) + 1);
-        keyStats.lastUsed.set(key, Date.now());
-        return deepSeekClients[0];
-    }
-
-    const sortedKeys = [...apiKeys].sort((a, b) => {
-        const errorsA = keyStats.errors.get(a) || 0;
-        const errorsB = keyStats.errors.get(b) || 0;
-        const lastUsedA = keyStats.lastUsed.get(a) || 0;
-        const lastUsedB = keyStats.lastUsed.get(b) || 0;
-        if (errorsA !== errorsB) return errorsA - errorsB;
-        return lastUsedA - lastUsedB;
-    });
-
-    const selectedKey = sortedKeys[0];
-    keyStats.calls.set(selectedKey, (keyStats.calls.get(selectedKey) || 0) + 1);
-    keyStats.lastUsed.set(selectedKey, Date.now());
-    const clientIndex = apiKeys.indexOf(selectedKey);
-
-    if (clientIndex === -1 || !deepSeekClients[clientIndex]) {
-        L(`⚠️ Chave selecionada (${selectedKey}) não encontrada. Usando a primeira chave.`);
-        if (apiKeys[0] !== selectedKey) {
-             keyStats.calls.set(apiKeys[0], (keyStats.calls.get(apiKeys[0]) || 0) + 1);
-             keyStats.lastUsed.set(apiKeys[0], Date.now());
-        }
-        return deepSeekClients[0];
-    }
-    return deepSeekClients[clientIndex];
+  const sortedKeys = [...apiKeys].sort((a, b) => {
+    const errorDiff = (keyStats.errors.get(a) || 0) - (keyStats.errors.get(b) || 0);
+    if (errorDiff !== 0) return errorDiff;
+    return (keyStats.lastUsed.get(a) || 0) - (keyStats.lastUsed.get(b) || 0);
+  });
+  const selectedKey = sortedKeys[0];
+  keyStats.calls.set(selectedKey, (keyStats.calls.get(selectedKey) || 0) + 1);
+  keyStats.lastUsed.set(selectedKey, Date.now());
+  const clientIndex = apiKeys.indexOf(selectedKey);
+  if (clientIndex === -1) {
+      // Fallback se a chave não for encontrada (improvável, mas seguro)
+      L(`⚠️ Chave selecionada ${selectedKey} não encontrada no pool de clientes. Usando a primeira chave.`);
+      return deepSeekClients[0];
+  }
+  return deepSeekClients[clientIndex];
 }
 
 /* ─── Utilitário de Log ──────────────────────────────────────────────────── */
-let auditLogStreamInstance: fs.WriteStream | null = null;
-const initializeLogStream = (): fs.WriteStream => {
-    if (!auditLogStreamInstance) {
-        try {
-            auditLogStreamInstance = fs.createWriteStream(LOG_FILE, { flags: 'a' });
-        } catch (error) {
-            console.error(`❌ Falha ao criar/abrir o arquivo de log ${LOG_FILE}: ${error instanceof Error ? error.message : String(error)}`);
-            const { Writable } = await import('node:stream'); // Import dinâmico
-            auditLogStreamInstance = new Writable({ write: () => {} }); // Stream que não faz nada
-        }
+// Garante que o stream de log seja criado apenas uma vez
+let auditLogStream: fs.WriteStream | null = null;
+const initializeLogStream = () => {
+    if (!auditLogStream) {
+        auditLogStream = fs.createWriteStream(LOG_FILE, { flags: 'a' });
     }
-    return auditLogStreamInstance;
+    return auditLogStream;
 }
 
 const L = (message: string) => {
   const stream = initializeLogStream();
   const timestampedMessage = `${new Date().toISOString()} • ${message}`;
   console.log(timestampedMessage);
-  if (stream && stream.writable) { // Verifica se o stream é gravável
-      stream.write(timestampedMessage + '\n');
-  }
+  stream.write(timestampedMessage + '\n');
 };
 
 const closeLogStream = () => {
-    if (auditLogStreamInstance && auditLogStreamInstance.writable) {
-        auditLogStreamInstance.end();
-        auditLogStreamInstance = null;
+    if (auditLogStream) {
+        auditLogStream.end();
+        auditLogStream = null; // Reset for potential future runs in the same process (if applicable)
     }
 }
 
@@ -138,14 +115,15 @@ const pipelineStats = {
   totalDbFailures: 0,
   questionsReclassified: 0,
   startTime: Date.now(),
+
   printSummary() {
     const duration = (Date.now() - this.startTime) / 1000;
     L('📊 RESUMO GERAL DA PIPELINE DE CURADORIA:');
     L(`   Tempo total de execução: ${duration.toFixed(1)} segundos`);
-    L(`   Total de questões processadas (tentativas de chamada à IA): ${this.totalQuestionsProcessedThisRun}`);
-    L(`   Sucessos de API (resposta válida recebida e parseada): ${this.totalApiSuccess}`);
-    L(`   Falhas de API (erro na chamada, resposta vazia ou JSON inválido): ${this.totalApiFailures}`);
-    L(`   Questões atualizadas no DB (com sucesso): ${this.totalDbUpdates}`);
+    L(`   Total de questões processadas (chamadas à IA): ${this.totalQuestionsProcessedThisRun}`);
+    L(`   Sucessos de API: ${this.totalApiSuccess}`);
+    L(`   Falhas de API: ${this.totalApiFailures}`);
+    L(`   Questões atualizadas no DB: ${this.totalDbUpdates}`);
     L(`   Falhas de atualização no DB: ${this.totalDbFailures}`);
     L(`   Questões reclassificadas (mudança de tópico): ${this.questionsReclassified}`);
     L('\n🔑 USO DE CHAVES API (GERAL):');
@@ -169,6 +147,7 @@ interface QuestionRecord {
   topic: string;
 }
 
+// Interface unificada para a resposta da IA, cobrindo todos os tópicos
 interface AICurationResponse {
   isMonomio?: boolean;
   isBinomio?: boolean;
@@ -176,26 +155,26 @@ interface AICurationResponse {
   isFatoracao?: boolean;
   isPolinomioGrauMaiorQue3?: boolean;
   isProdutoNotavel?: boolean;
-  corrected_topic: AlgebraticamenteTopic | string;
+
+  // Campos OBRIGATÓRIOS que a IA deve retornar
+  corrected_topic: AlgebraticamenteTopic | string; // Idealmente um dos nossos tópicos
   statement_latex: string;
   options_latex: string[];
   correct_option_index: number;
   hint: string;
-  remarks?: string;
+  remarks?: string; // Opcional
 }
 
 /* ─── Funções Utilitárias ────────────────────────────────────────────────── */
 function sanitizeString(str: string | undefined | null): string {
-    if (str === null || str === undefined) return '';
-    let text = String(str);
-    // eslint-disable-next-line no-control-regex
-    text = text.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, ''); // Remove caracteres de controle problemáticos primeiro
-    text = text.replace(/\\/g, '\\\\');
-    text = text.replace(/"/g, '\\"');
-    text = text.replace(/\n/g, '\\n');
-    text = text.replace(/\r/g, '\\r');
-    text = text.replace(/\t/g, '\\t');
-    return text;
+  if (!str) return '';
+  // Tentativa de ser mais seguro para LaTeX e JSON
+  return str
+    .replace(/\\/g, '\\\\') // Escapa TODAS as barras invertidas primeiro
+    .replace(/"/g, '\\"')   // Escapa aspas duplas
+    .replace(/\n/g, '\\n')  // Escapa nova linha
+    .replace(/\r/g, '\\r')  // Escapa carriage return
+    .replace(/\t/g, '\\t'); // Escapa tabulação
 }
 
 async function processBatch<T, R>(
@@ -203,49 +182,55 @@ async function processBatch<T, R>(
   processItem: (item: T) => Promise<R>,
   maxConcurrent = MAX_CONCURRENCY
 ): Promise<R[]> {
-    const results: R[] = [];
-    const executing: Promise<void>[] = []; // Store promises that wrap the processing
-    let itemIndex = 0;
+  const results: R[] = [];
+  const executing: Promise<void>[] = [];
+  let i = 0;
 
-    const scheduleNext = (): void => {
-        if (itemIndex < items.length && executing.length < maxConcurrent) {
-            const currentItem = items[itemIndex++];
-            const promise = processItem(currentItem)
-                .then(result => {
-                    results.push(result);
-                })
-                .catch(error => {
-                    L(`❌ Erro no processItem dentro do processBatch para item ${itemIndex -1}: ${error instanceof Error ? error.message : String(error)}`);
-                    // Não adiciona ao results para não quebrar a tipagem, mas o erro é logado.
-                })
-                .finally(() => {
-                    const idx = executing.indexOf(promise);
-                    if (idx !== -1) executing.splice(idx, 1);
-                    scheduleNext(); // Tenta agendar o próximo
-                });
-            executing.push(promise);
-        }
-    };
-
-    // Inicia as primeiras tarefas
-    for (let k = 0; k < maxConcurrent && k < items.length; k++) {
-        scheduleNext();
+  const runNext = async (item: T, p: Promise<void>) => {
+    try {
+      const result = await processItem(item);
+      results.push(result);
+    } catch (error) {
+      L(`❌ Erro processando item no lote: ${error instanceof Error ? error.message : String(error)}`);
+      // Decide se quer adicionar um resultado de erro ou pular
+      // results.push({ success: false, error: String(error) } as unknown as R); // Exemplo
+    } finally {
+      // Remove a promessa concluída (ou falhada)
+      const index = executing.findIndex(existingP => existingP === p);
+      if (index > -1) {
+          executing.splice(index, 1);
+      }
+      // Inicia o próximo item se houver
+      if (i < items.length) {
+          const nextItem = items[i++];
+          const nextP = new Promise<void>((resolve) => {
+            runNext(nextItem, nextP).then(resolve);
+          });
+          executing.push(nextP);
+      }
     }
+  };
 
-    // Espera todas as tarefas em execução terminarem
-    // Este loop é necessário porque scheduleNext() pode adicionar mais promessas a 'executing'
-    while (executing.length > 0 || itemIndex < items.length && results.length < items.length) {
-        if (executing.length === 0 && itemIndex < items.length) { // Se não há nada executando mas ainda há itens
-            scheduleNext(); // Tenta agendar mais
-        }
-        if (executing.length > 0) {
-            await Promise.race(executing).catch(() => {}); // Espera qualquer um terminar, ignora rejeições aqui pois já são tratadas
-        } else {
-            break; // Sai se não há mais nada executando nem para executar
-        }
-    }
-    await Promise.allSettled(executing); // Garante que todas as últimas tarefas terminem
-    return results;
+  // Inicia a concorrência inicial
+  while (i < items.length && executing.length < maxConcurrent) {
+      const item = items[i++];
+      const p = new Promise<void>((resolve) => {
+        runNext(item, p).then(resolve);
+      });
+      executing.push(p);
+  }
+
+  // Espera todas as promessas serem resolvidas
+  await Promise.allSettled(executing); // Use allSettled para garantir que tudo termine mesmo com rejeições
+
+  // Pode haver promessas restantes se o loop inicial não preencheu a concorrência
+  // e as primeiras tarefas terminaram muito rápido. Garante que tudo seja esperado.
+  while(executing.length > 0){
+      await Promise.allSettled(executing);
+  }
+
+
+  return results;
 }
 
 
@@ -261,22 +246,19 @@ async function fetchQuestionsForCuration(
   limit: number = 0
 ): Promise<QuestionRecord[]> {
   L(`🔍 Buscando questões para o tópico: ${topic}`);
-  let query = supabase.from('questions').select('id, statement_md, options, correct_option, solution_md, topic').eq('topic', topic);
+  let query = supabase.from('questions').select('*').eq('topic', topic);
   if (limit > 0) {
     query = query.limit(limit);
   }
-  const { data, error, status } = await query;
+  const { data, error } = await query;
 
   if (error) {
-    L(`❌ Erro ao buscar questões para ${topic} (Status: ${status}): ${error.message}`);
-    if (status === 401 || status === 403) {
-        L("   -> Verifique sua SUPABASE_URL e SUPABASE_SERVICE_KEY (precisa ser service_role).");
-    }
-    throw new Error(`Supabase fetch error: ${error.message}`);
+    L(`❌ Erro ao buscar questões para ${topic}: ${error.message}`);
+    throw error; // Re-lança para ser pego pelo handler principal
   }
-  if (!data) {
-     L(`⚠️ Nenhuma questão encontrada (data é null) para o tópico: ${topic}.`);
-     return [];
+  if (!data || data.length === 0) {
+    L(`⚠️ Nenhuma questão encontrada para o tópico: ${topic}.`);
+    return [];
   }
   L(`✔️ ${data.length} questões encontradas para ${topic}.`);
   return data as QuestionRecord[];
@@ -286,27 +268,26 @@ async function updateQuestionInSupabase(
   questionId: string,
   updates: Partial<QuestionRecord>
 ): Promise<boolean> {
+  // Garante que o tópico seja um dos válidos ou um string genérico se a IA falhar
   if (updates.topic && !TOPIC_SEQUENCE.includes(updates.topic as AlgebraticamenteTopic)) {
-      L(`⚠️ IA retornou tópico inválido "${updates.topic}" para ID ${questionId}. Update de tópico será ignorado.`);
+      L(`⚠️ IA retornou tópico inválido "${updates.topic}" para ID ${questionId}. Mantendo o tópico original ou o padrão.`);
+      // Decide o que fazer: manter o original, ou setar um padrão? Por segurança, vamos remover o update de tópico.
       delete updates.topic;
+      if (Object.keys(updates).length === 0) {
+          L(`ℹ️ Nenhum outro campo para atualizar para ID ${questionId} após remover tópico inválido.`);
+          return true; // Considera sucesso pois não havia nada válido para atualizar
+      }
   }
 
-   if (Object.keys(updates).length === 0) {
-       L(`ℹ️ Nenhum campo válido para atualizar para ID ${questionId}. Pulando DB update.`);
-       return true;
-   }
 
-  L(`🔄 Tentando atualizar questão ID ${questionId} com dados: ${JSON.stringify(updates)}`);
-  const { error, status } = await supabase
+  L(`🔄 Atualizando questão ID ${questionId} com dados: ${JSON.stringify(updates)}`);
+  const { error } = await supabase
     .from('questions')
     .update(updates)
     .eq('id', questionId);
 
   if (error) {
-    L(`❌ Erro ao atualizar questão ID ${questionId} (Status: ${status}): ${error.message}`);
-     if (status === 401 || status === 403) {
-        L("   -> Verifique se a SUPABASE_SERVICE_KEY é a 'service_role' key e tem permissão de escrita.");
-    }
+    L(`❌ Erro ao atualizar questão ID ${questionId}: ${error.message}`);
     pipelineStats.totalDbFailures++;
     return false;
   }
@@ -316,29 +297,6 @@ async function updateQuestionInSupabase(
 }
 
 /* ─── Interação com a IA ────────────────────────────────────────────────── */
-function tryParseJsonResponse(jsonString: string, questionId: string, attemptType: string): AICurationResponse | null {
-    try {
-        const parsed = JSON.parse(jsonString);
-        if (
-            !parsed || typeof parsed !== 'object' ||
-            typeof parsed.corrected_topic !== 'string' || !parsed.corrected_topic ||
-            typeof parsed.statement_latex !== 'string' || !parsed.statement_latex ||
-            !Array.isArray(parsed.options_latex) || parsed.options_latex.length === 0 ||
-            parsed.options_latex.some((opt: any) => typeof opt !== 'string' || !opt) ||
-            typeof parsed.correct_option_index !== 'number' ||
-            parsed.correct_option_index < 0 || parsed.correct_option_index >= parsed.options_latex.length ||
-            typeof parsed.hint !== 'string'
-           ) {
-            L(`❌ Resposta JSON (${attemptType}) para ${questionId} falhou na validação de estrutura/conteúdo.`);
-            return null;
-        }
-        return parsed as AICurationResponse;
-    } catch (e: any) {
-        L(`❌ Erro ao parsear JSON (${attemptType}) para ${questionId}: ${e.message}. String: ${jsonString.substring(0,100)}...`);
-        return null;
-    }
-}
-
 async function getCurationFromAI(
   question: QuestionRecord,
   currentCurationTopic: AlgebraticamenteTopic
@@ -349,32 +307,32 @@ async function getCurationFromAI(
 
   const payload = {
     statement: sanitizeString(question.statement_md),
-    options: question.options?.map(opt => sanitizeString(opt)) ?? [],
+    options: question.options.map(opt => sanitizeString(opt)),
     correct_option: question.correct_option,
     solution: sanitizeString(question.solution_md),
     current_topic_being_processed: currentCurationTopic,
   };
 
-  if (!payload.statement || !payload.options || payload.options.length === 0 || payload.options.some(opt => typeof opt !== 'string')) {
-      L(`❌ Payload inválido para ID ${question.id} (statement/options). Pulando.`);
-      pipelineStats.totalApiFailures++; return null;
+  // Validação simples do payload antes de enviar
+  if (!payload.statement || !payload.options || payload.options.some(opt => typeof opt !== 'string')) {
+      L(`❌ Payload inválido para ID ${question.id} antes de chamar a API. Pulando.`);
+      pipelineStats.totalApiFailures++; // Considera como falha de API
+      return null;
   }
-  if (typeof payload.correct_option !== 'number' || payload.correct_option < 0 || payload.correct_option >= payload.options.length) {
-       L(`❌ Payload inválido para ID ${question.id} (correct_option ${payload.correct_option} vs ${payload.options.length} opções). Pulando.`);
-       pipelineStats.totalApiFailures++; return null;
-  }
+
 
   try {
     const promptToSend = SYSTEM_PROMPTS[currentCurationTopic];
     if (!promptToSend) {
-        L(`❌ Prompt não encontrado para o tópico: ${currentCurationTopic}. Pulando ID ${question.id}`);
-        pipelineStats.totalApiFailures++; return null;
+        L(`❌ Prompt não encontrado para o tópico: ${currentCurationTopic}. Pulando questão ID ${question.id}`);
+        pipelineStats.totalApiFailures++;
+        return null;
     }
 
     L(`🤖 Chamando API para ID ${question.id} (Tópico: ${currentCurationTopic}, Chave: ${selectedKey?.substring(0,4)}...)`);
     const chatCompletion = await client.chat.completions.create({
       model: AI_MODEL,
-      temperature: 0.05,
+      temperature: 0.1,
       messages: [
         { role: 'system', content: promptToSend },
         { role: 'user', content: JSON.stringify(payload) },
@@ -384,49 +342,61 @@ async function getCurationFromAI(
 
     const rawResponse = chatCompletion.choices[0]?.message.content;
     if (!rawResponse) {
-      L(`⚠️ Resposta vazia da API para ID ${question.id} (Chave: ${selectedKey?.substring(0,4)})`);
+      L(`⚠️ Resposta vazia da API para questão ID ${question.id} (Chave: ${selectedKey?.substring(0,4)})`);
       keyStats.errors.set(selectedKey, (keyStats.errors.get(selectedKey) || 0) + 1);
-      pipelineStats.totalApiFailures++; return null;
+      pipelineStats.totalApiFailures++;
+      return null;
     }
 
-    let jsonResponse = tryParseJsonResponse(rawResponse, question.id, "direto");
-
-    if (!jsonResponse) {
-        L(`ℹ️ Tentando extrair JSON de markdown para ID ${question.id}...`);
-        const jsonMatch = rawResponse.match(/```json\s*([\s\S]*?)\s*```/m); // Adicionado 'm' para multiline
-        if (jsonMatch && jsonMatch[1]) {
-            jsonResponse = tryParseJsonResponse(jsonMatch[1], question.id, "markdown extraído");
-        } else {
-            L(`ℹ️ Nenhum bloco JSON markdown encontrado para ID ${question.id}.`);
-        }
+    try {
+      const jsonResponse = JSON.parse(rawResponse) as AICurationResponse;
+      // Validação mais robusta da resposta JSON
+      if (
+          !jsonResponse ||
+          typeof jsonResponse !== 'object' ||
+          typeof jsonResponse.corrected_topic !== 'string' ||
+          typeof jsonResponse.statement_latex !== 'string' ||
+          !Array.isArray(jsonResponse.options_latex) ||
+          jsonResponse.options_latex.some(opt => typeof opt !== 'string') ||
+          typeof jsonResponse.correct_option_index !== 'number' ||
+          typeof jsonResponse.hint !== 'string'
+         ) {
+          L(`❌ Resposta JSON inválida ou incompleta da IA para ${question.id}: Campos obrigatórios ausentes ou tipos incorretos.`);
+          L(`   Resposta recebida: ${rawResponse.substring(0, 300)}...`);
+          keyStats.errors.set(selectedKey, (keyStats.errors.get(selectedKey) || 0) + 1);
+          pipelineStats.totalApiFailures++;
+          return null;
+      }
+      pipelineStats.totalApiSuccess++;
+      L(`✅ Resposta JSON válida recebida para ID ${question.id}`);
+      return jsonResponse;
+    } catch (parseError: any) {
+      L(`❌ Erro ao parsear JSON da IA para questão ID ${question.id}: ${parseError.message} (Chave: ${selectedKey?.substring(0,4)})`);
+      L(`   Raw response: ${rawResponse.substring(0, 500)}...`);
+      keyStats.errors.set(selectedKey, (keyStats.errors.get(selectedKey) || 0) + 1);
+      pipelineStats.totalApiFailures++;
+      return null;
     }
-
-    if (!jsonResponse) {
-        L(`❌ Falha final ao obter JSON válido para ID ${question.id}. Raw: ${rawResponse.substring(0, 500)}...`);
-        keyStats.errors.set(selectedKey, (keyStats.errors.get(selectedKey) || 0) + 1);
-        pipelineStats.totalApiFailures++; return null;
-    }
-
-    pipelineStats.totalApiSuccess++;
-    L(`✅ Resposta JSON válida recebida e parseada para ID ${question.id}`);
-    return jsonResponse;
-
   } catch (apiError: any) {
+    // Trata erros específicos da API (rate limit, auth, etc.)
     let errorMessage = apiError instanceof Error ? apiError.message : String(apiError);
-    let statusCode = apiError?.status;
-    L(`❌ Erro na API para ID ${question.id} (Status: ${statusCode ?? 'N/A'}): ${errorMessage} (Chave: ${selectedKey?.substring(0,4)})`);
+    if (apiError.status) { // OpenAI errors often have a status code
+        errorMessage = `Status ${apiError.status}: ${errorMessage}`;
+    }
+    L(`❌ Erro na API para questão ID ${question.id}: ${errorMessage} (Chave: ${selectedKey?.substring(0,4)})`);
     keyStats.errors.set(selectedKey, (keyStats.errors.get(selectedKey) || 0) + 1);
-    pipelineStats.totalApiFailures++; return null;
+    pipelineStats.totalApiFailures++;
+    return null;
   }
 }
 
 /* ─── Função para processar uma questão completa ────────────────────────── */
 interface ProcessResult {
   questionId: string;
-  dbUpdateSuccess: boolean;
-  apiSuccess: boolean;
+  success: boolean; // Indica se a atualização no DB foi bem-sucedida
   newTopic?: string;
   originalTopic: string;
+  apiSuccess: boolean; // Indica se a chamada à API e o parse foram bem-sucedidos
 }
 
 async function processSingleQuestion(
@@ -438,27 +408,26 @@ async function processSingleQuestion(
   const aiResponse = await getCurationFromAI(question, currentCurationTopic);
 
   if (!aiResponse) {
+    // Falha na API ou no parse
     return {
         questionId: question.id,
-        dbUpdateSuccess: false,
-        apiSuccess: false,
-        originalTopic: question.topic
+        success: false, // DB update não ocorreu
+        originalTopic: question.topic,
+        apiSuccess: false
     };
   }
 
+  // API e parse OK, agora prepara e tenta o update no DB
   const updates: Partial<QuestionRecord> = {
-    topic: aiResponse.corrected_topic,
+    topic: aiResponse.corrected_topic, // A validação extra está em updateQuestionInSupabase
     statement_md: aiResponse.statement_latex,
     options: aiResponse.options_latex,
     correct_option: aiResponse.correct_option_index,
     solution_md: aiResponse.hint,
   };
 
-  const originalTopic = question.topic;
-  const finalTopic = updates.topic;
-
-  if (finalTopic && originalTopic !== finalTopic) {
-    L(`↪️ Questão ID ${question.id} reclassificada de "${originalTopic}" para "${finalTopic}" pela IA.`);
+  if (question.topic !== updates.topic && updates.topic) {
+    L(`↪️ Questão ID ${question.id} reclassificada de "${question.topic}" para "${updates.topic}" pela IA.`);
     pipelineStats.questionsReclassified++;
   }
 
@@ -466,10 +435,10 @@ async function processSingleQuestion(
 
   return {
     questionId: question.id,
-    dbUpdateSuccess: updateSuccess,
-    apiSuccess: true,
-    newTopic: finalTopic,
-    originalTopic: originalTopic,
+    success: updateSuccess, // Sucesso do DB update
+    newTopic: updates.topic,
+    originalTopic: question.topic,
+    apiSuccess: true // API e parse foram OK
   };
 }
 
@@ -479,6 +448,7 @@ async function mainPipeline() {
   L(`⚙️ Configuração: ${apiKeys.length} chaves API, Concorrência Máx: ${MAX_CONCURRENCY}, Tamanho Lote Processamento: ${BATCH_SIZE}`);
   L(`🏷️ Sequência de Tópicos: ${TOPIC_SEQUENCE.join(' → ')}`);
 
+  // Leitura de argumentos da linha de comando (ex: --max_per_topic=5)
   const args = process.argv.slice(2).reduce((acc, arg) => {
       const [key, value] = arg.split('=');
       if (key.startsWith('--')) {
@@ -500,7 +470,7 @@ async function mainPipeline() {
         questionsToProcess = await fetchQuestionsForCuration(currentTopic, maxQuestionsPerTopic);
     } catch (fetchError) {
         L(`❌ Falha crítica ao buscar questões para ${currentTopic}. Pulando este tópico.`);
-        continue;
+        continue; // Pula para o próximo tópico
     }
 
     if (questionsToProcess.length === 0) {
@@ -516,36 +486,37 @@ async function mainPipeline() {
     let apiSuccessCountInTopic = 0;
 
     for (let i = 0; i < questionBatches.length; i++) {
-      const batchItems = questionBatches[i];
-      L(`🔄 Processando lote ${i + 1}/${questionBatches.length} do tópico ${currentTopic} (${batchItems.length} questões)...`);
+      const batch = questionBatches[i];
+      L(`🔄 Processando lote ${i + 1}/${questionBatches.length} do tópico ${currentTopic} (${batch.length} questões)...`);
 
       const batchResults = await processBatch(
-        batchItems,
+        batch,
         (question) => processSingleQuestion(question, currentTopic),
         MAX_CONCURRENCY
       );
 
-      processedCountInTopic += batchItems.length;
+      // Contabiliza resultados do lote
+      processedCountInTopic += batch.length; // Contamos todas as tentativas de processamento
       batchResults.forEach(result => {
           if (result.apiSuccess) apiSuccessCountInTopic++;
-          if (result.dbUpdateSuccess) dbUpdateSuccessCountInTopic++;
+          if (result.success) dbUpdateSuccessCountInTopic++; // Sucesso = DB update OK
       });
 
-      L(`📊 Lote ${i + 1} concluído. Questões no lote: ${batchItems.length}. Sucesso API/Parse: ${batchResults.filter(r=>r.apiSuccess).length}. Sucesso DB Update: ${batchResults.filter(r=>r.dbUpdateSuccess).length}.`);
+      L(`📊 Lote ${i + 1} concluído. Questões no lote: ${batch.length}. Sucesso API/Parse: ${batchResults.filter(r=>r.apiSuccess).length}. Sucesso DB Update: ${batchResults.filter(r=>r.success).length}.`);
     }
     L(`✅ Tópico ${currentTopic} concluído. Total processado: ${processedCountInTopic}. Sucesso API/Parse: ${apiSuccessCountInTopic}. Sucesso DB Update: ${dbUpdateSuccessCountInTopic}.`);
   }
 
   L('\n🏁 PIPELINE DE CURADORIA FINALIZADA 🏁');
   pipelineStats.printSummary();
-  closeLogStream();
+  closeLogStream(); // Fecha o stream de log
 }
 
 // Executa a pipeline principal
 mainPipeline().catch(error => {
   L(`❌ ERRO FATAL NA PIPELINE: ${error instanceof Error ? error.message : String(error)}`);
-  console.error(error);
+  console.error(error); // Log completo do erro no console
   pipelineStats.printSummary();
   closeLogStream();
-  process.exit(1);
+  process.exit(1); // Termina com código de erro
 });
