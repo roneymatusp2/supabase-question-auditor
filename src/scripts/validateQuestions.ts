@@ -1,5 +1,5 @@
 // src/scripts/validateQuestions.ts
-// VERSÃO COMPLETA E CORRIGIDA DA PIPELINE DE CURADORIA
+// VERSÃO COMPLETA, MELHORADA E CORRIGIDA DA PIPELINE DE CURADORIA
 
 import 'dotenv/config';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
@@ -9,11 +9,12 @@ import path from 'node:path';
 import { Writable } from 'node:stream';
 
 // Importa os prompts e o tipo do arquivo system-prompts.ts que está em src/
+// Caminho relativo de src/scripts/ para src/system-prompts.ts
 import { SYSTEM_PROMPTS, AlgebraticamenteTopic } from '../system-prompts.js';
 
 /* ─── Configuração e Variáveis de Ambiente ────────────────────────────────── */
 const SUPABASE_URL = process.env.SUPABASE_URL as string;
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY as string;
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY as string; // !! USE A CHAVE SERVICE_ROLE !!
 
 const apiKeys = [
   process.env.DEEPSEEK_API_KEY,
@@ -106,8 +107,8 @@ async function initializeLogStreamAsync(): Promise<fs.WriteStream | Writable> {
     if (!auditLogStreamInstance || auditLogStreamInstance.destroyed) {
         try {
             auditLogStreamInstance = fs.createWriteStream(LOG_FILE, { flags: 'a' });
-            auditLogStreamInstance.on('error', (err) => {
-                console.error('Erro no stream de log durante a execução:', err);
+            auditLogStreamInstance.on('error', (err: Error) => { // <--- TIPO ADICIONADO
+                console.error('Erro no stream de log durante a execução:', err.message);
                 if (auditLogStreamInstance && typeof (auditLogStreamInstance as fs.WriteStream).close === 'function') {
                     (auditLogStreamInstance as fs.WriteStream).close();
                 }
@@ -133,7 +134,7 @@ const L = (message: string) => {
   console.log(timestampedMessage);
   const writeToStream = (stream: fs.WriteStream | Writable) => {
       if (stream && stream.writable && !(stream as fs.WriteStream).destroyed) {
-          stream.write(timestampedMessage + '\n', (err) => {
+          stream.write(timestampedMessage + '\n', (err?: Error | null) => { // <--- TIPO ADICIONADO
               if (err) { console.error(`Falha ao escrever no log (após inicialização): ${err.message}`); }
           });
       }
@@ -236,6 +237,7 @@ async function processBatch<T, R>(
     const results: R[] = [];
     const executing: Promise<void>[] = [];
     let itemIndex = 0;
+
     const scheduleNext = (): void => {
         if (itemIndex < items.length && executing.length < maxConcurrent) {
             const currentItem = items[itemIndex++];
