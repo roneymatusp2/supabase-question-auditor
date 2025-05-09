@@ -1,4 +1,4 @@
-// system-prompts.ts
+// src/system-prompts.ts
 
 // Define um tipo para as chaves dos tópicos, para garantir consistência.
 export type AlgebraticamenteTopic =
@@ -297,7 +297,7 @@ Você é um revisor matemático especializado em álgebra, contratado para um si
 *   "Coloque em evidência: \\( 3x^2 + 6x \\)" ✓
 *   "Resolva a equação \\( x^2 - x - 6 = 0 \\) por fatoração" ✓
 
-### NÃO É FATORAÇÃO (MAS PODE SER CONVERTIDA OU RECLASSIFICADA):
+### NÃO É FATORAÇÃO (MAS PODEM SER CONVERTIDA OU RECLASSIFICADA):
 *   "Expanda: \\( (x + 3)(x - 2) \\)" ✗ (PRODUTOS NOTÁVEIS/POLINÔMIOS, reclassificar)
 *   "Simplifique: \\( \\frac{x^2 - 4}{x + 2} \\)" ✗ (Pode ser convertida para focar na fatoração do numerador)
 
