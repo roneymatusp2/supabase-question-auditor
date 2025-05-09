@@ -1,15 +1,10 @@
-// src/scripts/validateQuestions.ts
-// VERSÃO AJUSTADA DA PIPELINE DE CURADORIA
-
 import 'dotenv/config';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { OpenAI } from 'openai';
 import fs from 'node:fs';
 import path from 'node:path'; // Para caminhos absolutos
 
-// Importa os prompts e o tipo do arquivo system-prompts.ts que está na RAIZ do projeto.
-// O '.js' é importante para a resolução de módulos ES pelo Node.js após a compilação.
-import { SYSTEM_PROMPTS, AlgebraticamenteTopic } from '../../system-prompts.js';
+import { SYSTEM_PROMPTS, AlgebraticamenteTopic } from '../system-prompts.js';
 
 /* ─── Configuração e Variáveis de Ambiente ────────────────────────────────── */
 const SUPABASE_URL = process.env.SUPABASE_URL as string;
