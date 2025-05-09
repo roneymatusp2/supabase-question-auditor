@@ -1,20 +1,19 @@
 // src/scripts/validateQuestions.ts
-// VERSÃO COMPLETA, MELHORADA E CORRIGIDA DA PIPELINE DE CURADORIA
+// VERSÃO FINAL COM CORREÇÕES DE LOG E PIPELINE
 
 import 'dotenv/config';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { OpenAI } from 'openai';
 import fs from 'node:fs';
 import path from 'node:path';
-import { Writable } from 'node:stream';
+import { Writable } from 'node:stream'; // Import Writable
 
 // Importa os prompts e o tipo do arquivo system-prompts.ts que está em src/
-// Caminho relativo de src/scripts/ para src/system-prompts.ts
 import { SYSTEM_PROMPTS, AlgebraticamenteTopic } from '../system-prompts.js';
 
 /* ─── Configuração e Variáveis de Ambiente ────────────────────────────────── */
 const SUPABASE_URL = process.env.SUPABASE_URL as string;
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY as string; // !! USE A CHAVE SERVICE_ROLE !!
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY as string;
 
 const apiKeys = [
   process.env.DEEPSEEK_API_KEY,
@@ -107,16 +106,19 @@ async function initializeLogStreamAsync(): Promise<fs.WriteStream | Writable> {
     if (!auditLogStreamInstance || auditLogStreamInstance.destroyed) {
         try {
             auditLogStreamInstance = fs.createWriteStream(LOG_FILE, { flags: 'a' });
-            auditLogStreamInstance.on('error', (err: Error) => { // <--- TIPO ADICIONADO
+            auditLogStreamInstance.on('error', (err: Error) => { // <--- CORREÇÃO APLICADA AQUI
                 console.error('Erro no stream de log durante a execução:', err.message);
                 if (auditLogStreamInstance && typeof (auditLogStreamInstance as fs.WriteStream).close === 'function') {
                     (auditLogStreamInstance as fs.WriteStream).close();
                 }
                 auditLogStreamInstance = null;
             });
+            // Não usar L() aqui para evitar recursão na inicialização do log
             const initialMsg = `${new Date().toISOString()} • ℹ️ Arquivo de log ${LOG_FILE} aberto/criado com sucesso.\n`;
             console.log(initialMsg.trim());
-            if (auditLogStreamInstance && auditLogStreamInstance.writable) auditLogStreamInstance.write(initialMsg);
+            if (auditLogStreamInstance && auditLogStreamInstance.writable) {
+                 auditLogStreamInstance.write(initialMsg);
+            }
         } catch (error) {
             console.error(`❌ Falha crítica ao criar/abrir o arquivo de log ${LOG_FILE}: ${error instanceof Error ? error.message : String(error)}`);
             auditLogStreamInstance = new Writable({
@@ -132,21 +134,26 @@ async function initializeLogStreamAsync(): Promise<fs.WriteStream | Writable> {
 const L = (message: string) => {
   const timestampedMessage = `${new Date().toISOString()} • ${message}`;
   console.log(timestampedMessage);
+
   const writeToStream = (stream: fs.WriteStream | Writable) => {
       if (stream && stream.writable && !(stream as fs.WriteStream).destroyed) {
-          stream.write(timestampedMessage + '\n', (err?: Error | null) => { // <--- TIPO ADICIONADO
+          stream.write(timestampedMessage + '\n', (err?: Error | null) => { // <--- CORREÇÃO APLICADA AQUI
               if (err) { console.error(`Falha ao escrever no log (após inicialização): ${err.message}`); }
           });
       }
   };
+
   if (auditLogStreamInstance && auditLogStreamInstance.writable && !(auditLogStreamInstance as fs.WriteStream).destroyed) {
       writeToStream(auditLogStreamInstance);
   } else {
+      // Se o stream não estiver pronto ou falhou, tenta inicializar/reinicializar
       initializeLogStreamAsync().then(stream => {
-          auditLogStreamInstance = stream;
+          auditLogStreamInstance = stream; // Atualiza a instância global
           writeToStream(stream);
       }).catch(initError => {
-          console.error(`Erro crítico ao tentar escrever no log após falha na inicialização do stream: ${initError.message}`);
+          // Se a inicialização falhar, o erro já foi logado em initializeLogStreamAsync
+          // A mensagem original (timestampedMessage) já foi para o console.
+          console.error(`Erro crítico ao tentar escrever no log após falha na inicialização do stream para a mensagem: "${message}". Erro: ${initError.message}`);
       });
   }
 };
@@ -155,7 +162,14 @@ const closeLogStream = () => {
     if (auditLogStreamInstance && auditLogStreamInstance.writable && !(auditLogStreamInstance as fs.WriteStream).destroyed) {
         const finalMsg = `${new Date().toISOString()} • ℹ️ Finalizando stream de log.\n`;
         console.log(finalMsg.trim());
-        auditLogStreamInstance.end(finalMsg, () => { auditLogStreamInstance = null; });
+        // Garante que 'end' seja chamado apenas se for um WriteStream de fs
+        if (typeof (auditLogStreamInstance as fs.WriteStream).end === 'function') {
+            (auditLogStreamInstance as fs.WriteStream).end(finalMsg, () => {
+                auditLogStreamInstance = null;
+            });
+        } else {
+             auditLogStreamInstance = null; // Para o Writable de fallback
+        }
     } else {
         auditLogStreamInstance = null;
     }
@@ -237,7 +251,6 @@ async function processBatch<T, R>(
     const results: R[] = [];
     const executing: Promise<void>[] = [];
     let itemIndex = 0;
-
     const scheduleNext = (): void => {
         if (itemIndex < items.length && executing.length < maxConcurrent) {
             const currentItem = items[itemIndex++];
@@ -465,7 +478,7 @@ async function processSingleQuestion(
 
 /* ─── Execução Principal da Pipeline ───────────────────────────────────── */
 async function mainPipeline() {
-  await initializeLogStreamAsync();
+  await initializeLogStreamAsync(); // Garante que o log esteja pronto
   L('🚀 Iniciando PIPELINE DE CURADORIA DE QUESTÕES...');
   L(`⚙️ Configuração: ${apiKeys.length} chaves API, Concorrência Máx: ${MAX_CONCURRENCY}, Tamanho Lote Processamento: ${BATCH_SIZE}`);
   L(`🏷️ Sequência de Tópicos: ${TOPIC_SEQUENCE.join(' → ')}`);
