@@ -7,10 +7,9 @@ import { OpenAI } from 'openai';
 import fs from 'node:fs';
 import path from 'node:path'; // Para caminhos absolutos
 
-// Importa os prompts e o tipo.
-// ASSUMINDO que system-prompts.ts está em src/ (um nível acima de src/scripts/)
-// Se system-prompts.ts estiver na RAIZ do projeto, mude para: '../../system-prompts.js'
-import { SYSTEM_PROMPTS, AlgebraticamenteTopic } from '../system-prompts.js';
+// Importa os prompts e o tipo do arquivo system-prompts.ts que está na RAIZ do projeto.
+// O '.js' é importante para a resolução de módulos ES pelo Node.js após a compilação.
+import { SYSTEM_PROMPTS, AlgebraticamenteTopic } from '../../system-prompts.js';
 
 /* ─── Configuração e Variáveis de Ambiente ────────────────────────────────── */
 const SUPABASE_URL = process.env.SUPABASE_URL as string;
@@ -27,18 +26,19 @@ const apiKeys = [
 const BATCH_SIZE = Number(process.env.BATCH_SIZE || '10');
 const MAX_CONCURRENCY = Math.min(
   Number(process.env.MAX_CONCURRENCY || '5'),
-  apiKeys.length * 3
+  apiKeys.length > 0 ? apiKeys.length * 3 : 1 // Garante ao menos 1 se não houver chaves (embora o script pare)
 );
 
 const AI_MODEL = 'deepseek-reasoner';
-// Garante que o log seja sempre na raiz do projeto
-const LOG_FILE = path.resolve(process.cwd(), 'curation-pipeline.log');
+const LOG_FILE = path.resolve(process.cwd(), 'curation-pipeline.log'); // Log na raiz do projeto
 
-if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY || apiKeys.length === 0) {
-  console.error(
-    '❌ Variáveis de ambiente obrigatórias ausentes (SUPABASE_URL, SUPABASE_SERVICE_KEY, pelo menos uma DEEPSEEK_API_KEY).'
-  );
+if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+  console.error('❌ SUPABASE_URL e SUPABASE_SERVICE_KEY são obrigatórias.');
   process.exit(1);
+}
+if (apiKeys.length === 0) {
+    console.error('❌ Pelo menos uma DEEPSEEK_API_KEY é obrigatória.');
+    process.exit(1);
 }
 
 const TOPIC_SEQUENCE: AlgebraticamenteTopic[] = [
@@ -68,12 +68,8 @@ const deepSeekClients = apiKeys.map(
 );
 
 function getNextDeepSeekClient(): OpenAI {
-    if (apiKeys.length === 0) {
-        throw new Error("Nenhuma chave de API DeepSeek configurada.");
-    }
-    if (deepSeekClients.length === 0) {
-        throw new Error("Pool de clientes DeepSeek não inicializado.");
-    }
+    if (apiKeys.length === 0) throw new Error("Nenhuma chave de API DeepSeek configurada.");
+    if (deepSeekClients.length === 0) throw new Error("Pool de clientes DeepSeek não inicializado.");
 
     if (apiKeys.length === 1) {
         const key = apiKeys[0];
@@ -97,7 +93,7 @@ function getNextDeepSeekClient(): OpenAI {
     const clientIndex = apiKeys.indexOf(selectedKey);
 
     if (clientIndex === -1 || !deepSeekClients[clientIndex]) {
-        L(`⚠️ Chave selecionada (${selectedKey}) não encontrada ou cliente inválido. Usando a primeira chave.`);
+        L(`⚠️ Chave selecionada (${selectedKey}) não encontrada. Usando a primeira chave.`);
         if (apiKeys[0] !== selectedKey) {
              keyStats.calls.set(apiKeys[0], (keyStats.calls.get(apiKeys[0]) || 0) + 1);
              keyStats.lastUsed.set(apiKeys[0], Date.now());
@@ -115,8 +111,8 @@ const initializeLogStream = (): fs.WriteStream => {
             auditLogStreamInstance = fs.createWriteStream(LOG_FILE, { flags: 'a' });
         } catch (error) {
             console.error(`❌ Falha ao criar/abrir o arquivo de log ${LOG_FILE}: ${error instanceof Error ? error.message : String(error)}`);
-            // Fallback para um stream que não faz nada se o arquivo falhar, para não quebrar o L()
-            auditLogStreamInstance = new fs.WriteStream(process.platform === 'win32' ? 'NUL' : '/dev/null');
+            const { Writable } = await import('node:stream'); // Import dinâmico
+            auditLogStreamInstance = new Writable({ write: () => {} }); // Stream que não faz nada
         }
     }
     return auditLogStreamInstance;
@@ -126,11 +122,13 @@ const L = (message: string) => {
   const stream = initializeLogStream();
   const timestampedMessage = `${new Date().toISOString()} • ${message}`;
   console.log(timestampedMessage);
-  stream.write(timestampedMessage + '\n');
+  if (stream && stream.writable) { // Verifica se o stream é gravável
+      stream.write(timestampedMessage + '\n');
+  }
 };
 
 const closeLogStream = () => {
-    if (auditLogStreamInstance) {
+    if (auditLogStreamInstance && auditLogStreamInstance.writable) {
         auditLogStreamInstance.end();
         auditLogStreamInstance = null;
     }
@@ -195,13 +193,13 @@ interface AICurationResponse {
 function sanitizeString(str: string | undefined | null): string {
     if (str === null || str === undefined) return '';
     let text = String(str);
+    // eslint-disable-next-line no-control-regex
+    text = text.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, ''); // Remove caracteres de controle problemáticos primeiro
     text = text.replace(/\\/g, '\\\\');
     text = text.replace(/"/g, '\\"');
     text = text.replace(/\n/g, '\\n');
     text = text.replace(/\r/g, '\\r');
     text = text.replace(/\t/g, '\\t');
-    // eslint-disable-next-line no-control-regex
-    text = text.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, '');
     return text;
 }
 
@@ -211,46 +209,47 @@ async function processBatch<T, R>(
   maxConcurrent = MAX_CONCURRENCY
 ): Promise<R[]> {
     const results: R[] = [];
-    const executing: Promise<any>[] = [];
-    let i = 0;
+    const executing: Promise<void>[] = []; // Store promises that wrap the processing
+    let itemIndex = 0;
 
-    function addTask() {
-        if (i < items.length) {
-            const itemPromise = processItem(items[i++])
+    const scheduleNext = (): void => {
+        if (itemIndex < items.length && executing.length < maxConcurrent) {
+            const currentItem = items[itemIndex++];
+            const promise = processItem(currentItem)
                 .then(result => {
                     results.push(result);
-                    return result; // Pass result for further chaining if needed
                 })
                 .catch(error => {
-                    L(`❌ Erro processando item no lote (índice ${i-1}): ${error instanceof Error ? error.message : String(error)}`);
-                    // results.push({ error: true, message: String(error) } as unknown as R); // Optionally push error marker
-                    return Promise.reject(error); // Propagate error to allow Promise.allSettled to see it
+                    L(`❌ Erro no processItem dentro do processBatch para item ${itemIndex -1}: ${error instanceof Error ? error.message : String(error)}`);
+                    // Não adiciona ao results para não quebrar a tipagem, mas o erro é logado.
                 })
                 .finally(() => {
-                    // Remove the promise from executing array
-                    const index = executing.indexOf(itemPromise);
-                    if (index > -1) {
-                        executing.splice(index, 1);
-                    }
-                    // If there are more items and we have capacity, add another task
-                    if (executing.length < maxConcurrent) {
-                        addTask();
-                    }
+                    const idx = executing.indexOf(promise);
+                    if (idx !== -1) executing.splice(idx, 1);
+                    scheduleNext(); // Tenta agendar o próximo
                 });
-            executing.push(itemPromise);
+            executing.push(promise);
+        }
+    };
+
+    // Inicia as primeiras tarefas
+    for (let k = 0; k < maxConcurrent && k < items.length; k++) {
+        scheduleNext();
+    }
+
+    // Espera todas as tarefas em execução terminarem
+    // Este loop é necessário porque scheduleNext() pode adicionar mais promessas a 'executing'
+    while (executing.length > 0 || itemIndex < items.length && results.length < items.length) {
+        if (executing.length === 0 && itemIndex < items.length) { // Se não há nada executando mas ainda há itens
+            scheduleNext(); // Tenta agendar mais
+        }
+        if (executing.length > 0) {
+            await Promise.race(executing).catch(() => {}); // Espera qualquer um terminar, ignora rejeições aqui pois já são tratadas
+        } else {
+            break; // Sai se não há mais nada executando nem para executar
         }
     }
-
-    // Start initial tasks up to maxConcurrency
-    for (let k = 0; k < Math.min(items.length, maxConcurrent); k++) {
-        addTask();
-    }
-
-    // Wait for all tasks in the current batch to settle
-    // This loop ensures that if tasks complete and new ones are added, we wait for those too.
-    while (executing.length > 0) {
-        await Promise.allSettled(executing);
-    }
+    await Promise.allSettled(executing); // Garante que todas as últimas tarefas terminem
     return results;
 }
 
@@ -295,14 +294,10 @@ async function updateQuestionInSupabase(
   if (updates.topic && !TOPIC_SEQUENCE.includes(updates.topic as AlgebraticamenteTopic)) {
       L(`⚠️ IA retornou tópico inválido "${updates.topic}" para ID ${questionId}. Update de tópico será ignorado.`);
       delete updates.topic;
-      if (Object.keys(updates).length === 0) {
-          L(`ℹ️ Nenhum outro campo válido para atualizar para ID ${questionId}. Pulando DB update.`);
-          return true;
-      }
   }
 
    if (Object.keys(updates).length === 0) {
-       L(`ℹ️ Nenhum campo para atualizar para ID ${questionId}. Pulando DB update.`);
+       L(`ℹ️ Nenhum campo válido para atualizar para ID ${questionId}. Pulando DB update.`);
        return true;
    }
 
@@ -326,10 +321,9 @@ async function updateQuestionInSupabase(
 }
 
 /* ─── Interação com a IA ────────────────────────────────────────────────── */
-function tryParseJson(jsonString: string, questionId: string, attemptType: string): AICurationResponse | null {
+function tryParseJsonResponse(jsonString: string, questionId: string, attemptType: string): AICurationResponse | null {
     try {
         const parsed = JSON.parse(jsonString);
-        // Validação rigorosa da estrutura do JSON parseado
         if (
             !parsed || typeof parsed !== 'object' ||
             typeof parsed.corrected_topic !== 'string' || !parsed.corrected_topic ||
@@ -338,14 +332,14 @@ function tryParseJson(jsonString: string, questionId: string, attemptType: strin
             parsed.options_latex.some((opt: any) => typeof opt !== 'string' || !opt) ||
             typeof parsed.correct_option_index !== 'number' ||
             parsed.correct_option_index < 0 || parsed.correct_option_index >= parsed.options_latex.length ||
-            typeof parsed.hint !== 'string' // Hint pode ser string vazia
+            typeof parsed.hint !== 'string'
            ) {
             L(`❌ Resposta JSON (${attemptType}) para ${questionId} falhou na validação de estrutura/conteúdo.`);
             return null;
         }
         return parsed as AICurationResponse;
     } catch (e: any) {
-        L(`❌ Erro ao parsear JSON (${attemptType}) para ${questionId}: ${e.message}`);
+        L(`❌ Erro ao parsear JSON (${attemptType}) para ${questionId}: ${e.message}. String: ${jsonString.substring(0,100)}...`);
         return null;
     }
 }
@@ -371,7 +365,7 @@ async function getCurationFromAI(
       pipelineStats.totalApiFailures++; return null;
   }
   if (typeof payload.correct_option !== 'number' || payload.correct_option < 0 || payload.correct_option >= payload.options.length) {
-       L(`❌ Payload inválido para ID ${question.id} (correct_option). Pulando.`);
+       L(`❌ Payload inválido para ID ${question.id} (correct_option ${payload.correct_option} vs ${payload.options.length} opções). Pulando.`);
        pipelineStats.totalApiFailures++; return null;
   }
 
@@ -385,7 +379,7 @@ async function getCurationFromAI(
     L(`🤖 Chamando API para ID ${question.id} (Tópico: ${currentCurationTopic}, Chave: ${selectedKey?.substring(0,4)}...)`);
     const chatCompletion = await client.chat.completions.create({
       model: AI_MODEL,
-      temperature: 0.05, // Ainda mais baixo para consistência
+      temperature: 0.05,
       messages: [
         { role: 'system', content: promptToSend },
         { role: 'user', content: JSON.stringify(payload) },
@@ -400,15 +394,13 @@ async function getCurationFromAI(
       pipelineStats.totalApiFailures++; return null;
     }
 
-    // Tentativa 1: Parse direto
-    let jsonResponse = tryParseJson(rawResponse, question.id, "direto");
+    let jsonResponse = tryParseJsonResponse(rawResponse, question.id, "direto");
 
-    // Tentativa 2: Extrair de bloco de markdown se o parse direto falhar
     if (!jsonResponse) {
         L(`ℹ️ Tentando extrair JSON de markdown para ID ${question.id}...`);
-        const jsonMatch = rawResponse.match(/```json\s*([\s\S]*?)\s*```/);
+        const jsonMatch = rawResponse.match(/```json\s*([\s\S]*?)\s*```/m); // Adicionado 'm' para multiline
         if (jsonMatch && jsonMatch[1]) {
-            jsonResponse = tryParseJson(jsonMatch[1], question.id, "markdown extraído");
+            jsonResponse = tryParseJsonResponse(jsonMatch[1], question.id, "markdown extraído");
         } else {
             L(`ℹ️ Nenhum bloco JSON markdown encontrado para ID ${question.id}.`);
         }
